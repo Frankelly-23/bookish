@@ -11,6 +11,7 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
 DRAFTS_DIR = os.path.join(PROJECT_ROOT, "data", "drafts")
 PDFS_DIR = os.path.join(PROJECT_ROOT, "data", "pdfs")
+PRESENTATIONS_DIR = os.path.join(PROJECT_ROOT, "data", "presentations")
 
 # HTML Template with styling for academic PDF look
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -59,6 +60,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             max-height: 1.7in;
             margin-bottom: 0.4in;
             display: inline-block;
+        }}
+
+        /* Screenshots / evidence images */
+        img.screenshot {{
+            display: block;
+            max-width: 100%;
+            margin: 0.2in auto;
+            border: 1px solid #cccccc;
         }}
 
         .cover-page h1 {{
@@ -365,19 +374,8 @@ def convert_md_to_pdf():
                 # Render inside our styled template
                 full_html = HTML_TEMPLATE.format(title=title.replace("_", " ").title(), content=html_body)
                 
-                # Replace the logo relative reference with a base64 Data URI for inline rendering
-                logo_path = os.path.join(PROJECT_ROOT, "data", "images", "Universidad_Central_del_Este.jpeg")
-                if os.path.exists(logo_path):
-                    import base64
-                    with open(logo_path, "rb") as img_file:
-                        b64_str = base64.b64encode(img_file.read()).decode('utf-8')
-                    file_uri = f"data:image/jpeg;base64,{b64_str}"
-                else:
-                    file_uri = ""
-                    print(f"Warning: Logo image not found at '{logo_path}'", file=sys.stderr)
-                
-                full_html = full_html.replace('src="logo.jpeg"', f'src="{file_uri}"')
-                full_html = full_html.replace("src='logo.jpeg'", f"src='{file_uri}'")
+                # Inline all images (logo, screenshots, etc.) as base64 data URIs
+                full_html = inline_images(full_html)
                 
                 # Set page content
                 page.set_content(full_html)
@@ -398,5 +396,99 @@ def convert_md_to_pdf():
         browser.close()
         print("PDF conversion completed successfully!", file=sys.stderr)
 
+def image_data_uri(filename):
+    """
+    Returns a base64 data URI for an image located in data/images/,
+    or the original filename if the image is not found.
+    """
+    if not filename or filename.startswith("data:"):
+        return filename
+
+    # Backwards compatibility: "logo.jpeg" maps to the UCE logo file
+    if filename == "logo.jpeg":
+        filename = "Universidad_Central_del_Este.jpeg"
+
+    img_path = os.path.join(PROJECT_ROOT, "data", "images", filename)
+    if not os.path.exists(img_path):
+        print(f"Warning: Image not found at '{img_path}'", file=sys.stderr)
+        return filename
+
+    import base64
+    mime_map = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
+    mime = mime_map.get(os.path.splitext(filename)[1].lower(), "image/png")
+    with open(img_path, "rb") as img_file:
+        b64_str = base64.b64encode(img_file.read()).decode('utf-8')
+    return f"data:{mime};base64,{b64_str}"
+
+
+def inline_images(html):
+    """
+    Replaces every src="<filename>" reference in the HTML with a base64 data URI
+    resolved from data/images/.
+    """
+    def _replace(match):
+        src = match.group(1)
+        return f'src="{image_data_uri(src)}"'
+
+    return re.sub(r'src="([^"]+)"', _replace, html)
+
+
+def sanitize_filename(filename):
+    """
+    Cleans a string to make it safe for use as a file name.
+    """
+    clean = re.sub(r'[^\w\s-]', '', filename)
+    clean = re.sub(r'[-\s]+', '_', clean)
+    return clean.strip().lower()
+
+def render_presentation_png(item, output_path=None):
+    """
+    Renders an assignment cover page / presentation sheet as a PNG image in data/presentations/.
+    'item' dict keys: title, course_code, student_name, student_enrrolment, due_date.
+    """
+    os.makedirs(PRESENTATIONS_DIR, exist_ok=True)
+    
+    title = item.get("title", "Presentacion")
+    course_code = item.get("course_code", "")
+    student_name = item.get("student_name", "Frankelly Cordero")
+    student_enrrolment = item.get("student_enrrolment", "2024-3153")
+    due_date = item.get("due_date", "Sin fecha límite")
+
+    if not output_path:
+        safe_title = sanitize_filename(title)
+        output_path = os.path.join(PRESENTATIONS_DIR, f"{safe_title}.png")
+
+    header_html = (
+        f"<div class=\"cover-page\">\n"
+        f"  <img src=\"logo.jpeg\" alt=\"Universidad Central del Este\" class=\"cover-logo\" />\n"
+        f"  <h2>Facultad de Ciencias e Ingenierías</h2>\n"
+        f"  <h3>Escuela de Ingeniería de Software</h3>\n\n"
+        f"  <p><strong>Asignatura:</strong> {course_code}</p>\n"
+        f"  <p><strong>Asignación:</strong> {title}</p>\n"
+        f"  <p><strong>Estudiante:</strong> {student_name}</p>\n"
+        f"  <p><strong>Matrícula:</strong> {student_enrrolment}</p>\n"
+        f"  <p><strong>Fecha Límite:</strong> {due_date}</p>\n"
+        f"</div>\n"
+    )
+
+    full_html = HTML_TEMPLATE.format(title=title, content=header_html)
+    full_html = inline_images(full_html)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 816, "height": 1056})
+        page.set_content(full_html)
+        page.locator(".cover-page").screenshot(path=output_path)
+        browser.close()
+
+    return output_path
+
 if __name__ == "__main__":
     convert_md_to_pdf()
+

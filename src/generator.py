@@ -31,9 +31,8 @@ def generate_assignment_draft(client, title, description, course_code, course_na
     """
     Formulates a prompt and sends the assignment details to the Gemini API.
     """
-    # System instructions enforce natural student tone, formatting, and avoid lists for essays.
     system_instruction = (
-        "Actúas como un estudiante universitario de término de ingeniería de software que escribe "
+        "Actúas como un estudiante universitario de ingeniería de software que escribe "
         "un trabajo académico de forma natural y personal. Aplica estas reglas a menos que te pongan una excepción:\n"
         "1. Usa un tono directo y ligeramente conversacional, como si explicaras el tema a un compañero de clase inteligente — no a un tribunal. Evita saludos inmaduros o informales infantiles como 'Hola profe', 'Hola profesor' o '¡Qué onda a todos!'. Mantén la seriedad e identidad de un joven estudiante universitario.\n"
         "2. Varía el largo de las oraciones deliberadamente: alterna frases cortas con otras más largas. Evita que todas las oraciones tengan una estructura similar.\n"
@@ -197,7 +196,9 @@ def curses_prompt_assignment(stdscr, item, index, total):
         action_y = height - 1
         stdscr.addstr(action_y, 2, "[")
         stdscr.addstr("Y", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Generar Borrador   [")
+        stdscr.addstr("] Borrador IA   [")
+        stdscr.addstr("P", curses.color_pair(3) | curses.A_BOLD)
+        stdscr.addstr("] Presentación (PNG)   [")
         stdscr.addstr("N", curses.color_pair(3) | curses.A_BOLD)
         stdscr.addstr("] Omitir   [")
         stdscr.addstr("Q", curses.color_pair(3) | curses.A_BOLD)
@@ -217,31 +218,25 @@ def curses_prompt_assignment(stdscr, item, index, total):
         elif ch == curses.KEY_NPAGE:
             scroll_pos = min(max_scroll, scroll_pos + desc_height)
         elif ch in [ord('y'), ord('Y'), 10, 13]: # Y or Enter keys
-            # Transition to input screen for optional notes
-            curses.curs_set(1) # Show cursor
-            stdscr.clear()
+            # Temporarily exit curses to use regular input() (supports paste)
+            curses.endwin()
 
-            stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
-            stdscr.addstr(0, 0, " Bookish TUI | Detalles Adicionales " + " " * (width - 36))
-            stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+            print(f"\n  Tarea: {title}")
+            print(f"  ¿Desea agregar instrucciones o detalles adicionales para Gemini?")
+            print(f"  (Presione Enter sin escribir nada para omitir)\n")
 
-            stdscr.addstr(2, 2, "Tarea: " + title[:width-10], curses.A_BOLD)
-            stdscr.addstr(4, 2, "¿Desea agregar instrucciones o detalles adicionales para Gemini?")
-            stdscr.addstr(5, 2, "(Presione Enter sin escribir nada para omitir)")
-            stdscr.addstr(7, 2, "> ")
-            stdscr.refresh()
-
-            curses.echo()
             additional_info = ""
             try:
-                user_bytes = stdscr.getstr(7, 4, max(10, width - 8))
-                additional_info = user_bytes.decode('utf-8', errors='ignore').strip()
-            except Exception:
+                additional_info = input("  > ").strip()
+            except (KeyboardInterrupt, EOFError):
                 pass
-            curses.noecho()
-            curses.curs_set(0)
+
+            # Resume curses
+            stdscr.refresh()
 
             return "yes", additional_info
+        elif ch in [ord('p'), ord('P')]:
+            return "presentation", ""
         elif ch in [ord('n'), ord('N')]:
             return "no", ""
         elif ch in [ord('q'), ord('Q')]:
@@ -324,11 +319,11 @@ def process_assignments():
     client = genai.Client()
     
     for item in approved_assignments:
-        title = item["title"]
-        description = item["description"]
-        course_code = item["course_code"]
-        course_name = item["course_name"]
-        due_date = item["due_date"]
+        title = item.get("title", "Sin Título")
+        description = item.get("description", "")
+        course_code = item.get("course_code", "")
+        course_name = item.get("course_name", "")
+        due_date = item.get("due_date", "Sin fecha límite")
         student_name = item.get("student_name", "")
         student_enrrolment = item.get("student_enrrolment", "")
         output_file = item["output_file"]

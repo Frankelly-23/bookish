@@ -1,0 +1,62 @@
+[
+  {
+    "title": "Actividad 1. Herencia de Clases",
+    "url": "https://moodle.uce.edu.do/mod/assign/view.php?id=3220274",
+    "course_code": "ISW-123-1",
+    "open_date": "viernes, 31 de julio de 2026, 00:00",
+    "due_date": "martes, 4 de agosto de 2026, 18:00",
+    "description": "Diseña INFORME desarrollando los siguientes contenidos. Elabora ejemplos básicos de herencia de clases c#.\n¿Qué es herencia jerarquica en lenguaje de programación C#?\n¿Característica de la herencia en c#?\n¿Tipos de herencia en programación orientada a objeto?",
+    "student_name": "Frankelly Cordero",
+    "student_enrrolment": "2024-3153"
+  },
+  {
+    "title": "PRÁCTICA 2. Registro de Empleados",
+    "url": "https://moodle.uce.edu.do/mod/assign/view.php?id=3342177",
+    "course_code": "ISW-123-1",
+    "open_date": "jueves, 30 de julio de 2026, 00:00",
+    "due_date": "martes, 4 de agosto de 2026, 20:00",
+    "description": "Implementar los modificadores de acceso en un sistema orientado a objetos utilizando HERENCIA.  Desarrollar el formulario Registro de Empleados del Proyecto Final.\n\nCampos del formulario registro empleados: Código, Nombre, Apellido, Cédula, Cargo, Departamento, Salario, Fecha de ingreso.\n\n \n\nBOTONES: : Guardar, Buscar, Actualizar y Eliminar.\n\n \n\nINDICACIONES:\n\nCrear la clase Cliente\nCrear la clase Empleado heredando de Cliente.\nUtilizar:\nprotected para atributos heredados.\nprivate para datos sensibles.\npublic para métodos del formulario.\nprotected internal para miembros compartidos entre clases del proyecto.\nMostrar los datos en un DataGridView.\nCOMENTA en el código qué modificador de acceso utiliza cada miembro y justificar su elección.\n\t\n Practica 2. Registro Empleado- Resultados evidencias.pdf \n31 de julio de 2026, 14:26",
+    "student_name": "Frankelly Cordero",
+    "student_enrrolment": "2024-3153"
+  },
+  {
+    "title": "PROYECTO FINAL Programación Media",
+    "url": "https://moodle.uce.edu.do/mod/assign/view.php?id=3220282",
+    "course_code": "ISW-123-1",
+    "open_date": "lunes, 27 de julio de 2026, 03:28",
+    "due_date": "viernes, 7 de agosto de 2026, 18:00",
+    "description": "DISEÑAR un sistema VENTAS de su EMPRESA O NEGOCIO con un MENÚ en donde se registre los Usuarios, Empleados, Clientes, Inventario, Registro de Suplidores,  FACTURACIÓN o venta de Artículos y REPORTES.\n\nEl Sistema debe tener un Login o identificación Usuario. \nEl sistema debe tener una ventana de crear, Modificar, Eliminar Usuarios\nEl Sistema debe tener una ventana de Crear, Modificar, Eliminar Empleados.\nEl Sistema debe tener una ventana de Crear, Modificar, Eliminar Clientes.\nEl Sistema debe tener una ventana de Crear, Modificar, Eliminar INVENTARIO.\nEl Sistema debe tner una ventana de Crear, Modificar, Eliminar Registro de Suplidores.\nEl Sistema debe tener una ventana de REGISTRAR Ventas de articulo o producto (Guardar, imprimir). \nEl Sistema debe tener una ventana para REPORTES:\n Empleados, \nClientes, \nInventario, \nSuplidores, \nVentas por Dia, Mes, Fecha. \n\nEL PROYECTO FINAL DEBE TENER LOS SIGUIENTES REQUERIMIENTOS: \n\nCONEXIÓN a la base de datos ADO.NET\nDiseña CLASE (ConexionBD), REUTILIZA la clase en los formularios de la aplicación. \nExpresiones Lambda\nHerencia de Clases.\nPolimorfismos\nClases Estáticas\nDelegados\nPredicados\nListas\nBucles FORECH\nManejo de Excepciones\nEncapsulación (Modificadores de Accesos)\nBLOQUES DE CÓDIGOS debidamentes COMENTADOS.\n\nNOTA. Subir una CARPETA CON SU MATRÍCULA Y NOMBRE, en formato Archivo.rar o COMPRIMIDO con los códigos fuentes del proyecto y la base de Datos.",
+    "student_name": "Frankelly Cordero",
+    "student_enrrolment": "2024-3153"
+  },
+  {
+    "title": "TALLER MECÁNICO (sustituida)",
+    "url": "https://moodle.uce.edu.do/mod/assign/view.php?id=3340992",
+    "course_code": "ISW-211-1",
+    "open_date": "lunes, 27 de julio de 2026, 00:00",
+    "due_date": "lunes, 10 de agosto de 2026, 00:00",
+    "description": "Se desea construir una base de datos para la gestión de un taller mecánico que deberá contener la información referente a los clientes, los vehículos que repara, los mecánicos que trabajan en su taller y los repuestos que\nse han utilizado para realizar una determinada reparación.\n\n\nEl funcionamiento del taller es el siguiente:\n\n1. Se registra tanto el cliente como el vehículo que trae al taller para su reparación. Este registro recoge el documento de indentificacion, Nombre y Apellidos, Dirección y Teléfono de contacto del cliente. Del vehículo se recogen la matrícula,\nel modelo y el color. También se registra la fecha de entrada del vehículo en el taller y su hora.\n\n2. Una vez registrado, se le asigna un mecánico (libre) que se encargará de evaluar los daños.\n\n3. Posteriormente, este mecánico puede rodearse de otros mecánicos que le ayudarán en la reparación.\n\n\n4. Los mecánicos que participan en la reparación irán anotando en una hoja de parte todos aquellos repuestos que les han sido necesarios para llevar a cabo la reparación y el precio de la mano de obra.\n\n\n5. Una vez terminada la reparación, la hoja de parte se pasa a la persona que mantiene el sistema de información, la cual introducirá los datos que generarán la correspondiente factura para el cliente. La factura por tanto, debe contener todos los datos del cliente, los datos del mecánico al que ha sido asignado y el desglose de qué repuestos se han utilizado con su precio por unidad, el precio de la mano de obra y el total de la factura. A este total se le aplica el 16 % de impuesto y además deberá el precio total de la reparación aparecerá en pesos dominicanos.\n\nRequisitos: \n\n1 - Entender bien el requisito\n\n\n2 - Hacer diagrama Conceptual utilizando palabras de dominios (rectangulos, ovalos, rombos ...)\n\n3 - Hacer diagrama ER explicito (estructuras de tablas con todos los artributos representando el diagrama conceptual)\n\n\n\n4 - Crear todas las tablas aplicando solo lo que hemos vistos hasta ahora, especialmente las nomezclaturas (no usar nada que no hemos visto en clase).\n\n\n\nNOTA:\nPresentar de manera formar (introduccion, desarrollo, conclusion), Se valuara todo el proceso de sarrollo, asi que sera obligatorio subir imagenes de cada paso del procesos.",
+    "student_name": "Frankelly Cordero",
+    "student_enrrolment": "2024-3153"
+  },
+  {
+    "title": "Proyecto Final Grupal - Desarrollo de producto innovador y su análisis económico.",
+    "url": "https://moodle.uce.edu.do/mod/assign/view.php?id=3257598",
+    "course_code": "ECO-011-1",
+    "open_date": "jueves, 23 de julio de 2026, 17:00",
+    "due_date": "jueves, 13 de agosto de 2026, 21:00",
+    "description": "Estimados estudiantes, \n\nDando continuidad a nuestras sesiones sincrónicas pasadas, tengo a bien compartirles que el objetivo de este proyecto final integrador es: Aplicar los conocimientos adquiridos durante el curso para realizar un análisis económico completo del producto creado por los grupos, considerando su inserción en el mercado, el tipo de competencia, el modo de producción más adecuado y el impacto de la situación macroeconómica nacional.\n\nCada grupo deberá desarrollar un producto útil e innovador, además deberán considerar las potenciales características de oferta y demanda para ese producto, ese proyecto además debe considerar la creación de un informe escrito en el que se consideren los siguientes apartados:\n\n1. Tipo de Competencia en el Mercado\n\nIdentifiquen y describan el tipo de competencia que predomina en el mercado donde se insertará su producto (competencia perfecta, monopolio, oligopolio, competencia monopolística).\nJustifiquen su elección con base en:\n  Número de oferentes y demandantes.\n  Diferenciación del producto.\n  Barreras de entrada.\n  Poder de fijación de precios.\n\n 2. Modo de Producción y Desarrollo Nacional\n\nElijan el modo de producción (capitalista, socialista, mixto, comunitario, etc.) que consideran más adecuado para fomentar el desarrollo del país a partir de su producto.\nArgumenten su elección considerando:\n Impacto en el empleo.\n Distribución de la riqueza.\n Sostenibilidad ambiental.\n Inclusión social y territorial. \n\n3. Análisis Macroeconómico\n\nRealicen un análisis de cómo la situación macroeconómica actual del país afecta el desarrollo de su mercado.\nIncluyan variables como:\nInflación.\nTipo de cambio.\nPIB.\n\n  Respecto del Formato del Informe, se les pide:\n\nExtensión máxima: 8 páginas.\nLetra: Times New Roman 12, interlineado 1.5.\nIncluir subtítulos, gráficos o tablas si es necesario.\nBibliografía con al menos 3 fuentes académicas o institucionales.\n\nEn su entregable, deberán cargar una presentación powerpoint en la que introduzcan y comenten sus productos, ambos documentos deberán estar en formato PDF.\n\nLos Criterios de Evaluación de este proyecto integrador serán los siguientes:\n\nClaridad y profundidad del análisis (5 puntos)\nCoherencia entre los apartados (4 puntos)\nUso adecuado de conceptos económicos (5 puntos)\nCapacidad de argumentación (3 puntos)\nPresentación visual y oral (3 puntos)\n\nValor: 20 puntos\n\n***SOLO UNA PERSONA POR GRUPO DEBERÁ HACER LA ENTREGA EN LA PLATAFORMA***",
+    "student_name": "Frankelly Cordero",
+    "student_enrrolment": "2024-3153"
+  },
+  {
+    "title": "Entrega de Practica Final",
+    "url": "https://moodle.uce.edu.do/mod/assign/view.php?id=3168383",
+    "course_code": "INF-021-1",
+    "open_date": "miércoles, 22 de julio de 2026, 09:00",
+    "due_date": "domingo, 23 de agosto de 2026, 12:00",
+    "description": "Reproducir Vídeo",
+    "student_name": "Frankelly Cordero",
+    "student_enrrolment": "2024-3153"
+  }
+]

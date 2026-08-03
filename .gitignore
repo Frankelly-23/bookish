@@ -13,8 +13,6 @@ env/
 # Sensitive data
 state.json
 
-# Generated data
-data/
 
 # IDE
 .vscode/
