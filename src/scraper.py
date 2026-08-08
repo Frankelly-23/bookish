@@ -1,6 +1,8 @@
+import re
 import os
 import sys
 import json
+import time
 from playwright.sync_api import sync_playwright
 
 # Resolve absolute paths relative to this script's location
@@ -10,35 +12,178 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 STATE_FILE = os.path.join(PROJECT_ROOT, "state.json")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ASSIGNMENTS_FILE = os.path.join(DATA_DIR, "assignments.json")
+ATTACHMENTS_DIR = os.path.join(DATA_DIR, "attachments")
 BASE_URL = "https://moodle.uce.edu.do"
 LOGIN_URL = f"{BASE_URL}/login/index.php"
 CALENDAR_URL = f"{BASE_URL}/calendar/view.php?view=month"
 
-def login_and_save_session(username: str, password: str):
 
+def extract_attachment_text(file_path):
     """
-    Handles logging in.
-    If username/password are provided, logs in programmatically (headless).
-    Otherwise, launches a visible browser window for manual login.
+    Extracts text from PDF or image files using PyMuPDF (fitz) with OCR fallback.
     """
-     
+    if not os.path.exists(file_path):
+        return ""
+
+    ext = os.path.splitext(file_path)[1].lower()
+    text_content = []
+
+    if ext == ".pdf":
+        try:
+            import pymupdf  # PyMuPDF
+            doc = pymupdf.open(file_path)
+            for page_num, page in enumerate(doc, 1):
+                page_text = page.get_text("text").strip()
+                # If page text is sparse (scanned image PDF), fallback to OCR
+                if len(page_text) < 30:
+                    try:
+                        import pytesseract
+                        from PIL import Image
+                        pix = page.get_pixmap(dpi=150)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        ocr_text = pytesseract.image_to_string(img, lang="spa+eng").strip()
+                        if ocr_text:
+                            page_text = ocr_text
+                    except Exception:
+                        pass
+                if page_text:
+                    text_content.append(f"--- [Página {page_num}] ---\n{page_text}")
+            doc.close()
+        except Exception as e:
+            print(f"Warning: Failed to extract PDF text from '{file_path}': {e}", file=sys.stderr)
+    elif ext in [".png", ".jpg", ".jpeg", ".webp"]:
+        try:
+            import pytesseract
+            from PIL import Image
+            img = Image.open(file_path)
+            ocr_text = pytesseract.image_to_string(img, lang="spa+eng").strip()
+            if ocr_text:
+                text_content.append(ocr_text)
+        except Exception:
+            pass
+
+    return "\n\n".join(text_content).strip()
+
+
+def dismiss_overlays(page):
+    """
+    Aggressively dismisses any modals, popups, survey banners, cookie consents,
+    or other overlay elements that Moodle (or its admins) might inject.
+    Designed to be safe to call on any page at any time.
+    """
+    # 1. JavaScript nuclear option: remove known blocking overlays and set flags
+    #    so they don't reappear during this session.
+    page.evaluate("""() => {
+        // Known modal IDs that UCE Moodle has used
+        const knownModals = [
+            'qr-modal-aviso',
+            'modal-aviso',
+            'popup-encuesta',
+            'survey-modal',
+            'cookie-notice',
+            'cookie-banner',
+        ];
+        for (const id of knownModals) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        // Set sessionStorage flags that known modals check before showing
+        try {
+            sessionStorage.setItem('qr_encuesta_visto', '1');
+            sessionStorage.setItem('encuesta_visto', '1');
+            sessionStorage.setItem('aviso_visto', '1');
+            sessionStorage.setItem('cookie_accepted', '1');
+        } catch(e) {}
+
+        // Generic: remove any fixed/absolute positioned element that covers >50% of viewport
+        // and isn't a core Moodle container
+        const dominated = ['page-wrapper', 'page', 'topofscroll', 'maincontent'];
+        document.querySelectorAll('div[style*="position:fixed"], div[style*="position: fixed"], div[style*="z-index:99"]').forEach(el => {
+            if (dominated.includes(el.id)) return;
+            const rect = el.getBoundingClientRect();
+            const viewArea = window.innerWidth * window.innerHeight;
+            const elArea = rect.width * rect.height;
+            if (elArea > viewArea * 0.3) {
+                el.remove();
+            }
+        });
+    }""")
+
+    # 2. Try clicking known dismiss buttons (safe even if they don't exist)
+    dismiss_selectors = [
+        'button[onclick*="cerrarAviso"]',
+        'button[onclick*="cerrar"]',
+        '#qr-modal-aviso button',
+        '.modal .close',
+        '.modal .btn-close',
+        '.modal [data-dismiss="modal"]',
+        '.modal [data-bs-dismiss="modal"]',
+        '[aria-label="Close"]',
+        '.cookie-notice button',
+        '.cc-dismiss',
+    ]
+    for selector in dismiss_selectors:
+        try:
+            btn = page.locator(selector)
+            if btn.count() > 0 and btn.first.is_visible():
+                btn.first.click(timeout=1000)
+                time.sleep(0.3)
+        except Exception:
+            pass
+
+
+def safe_goto(page, url, retries=2):
+    """
+    Navigates to a URL, waits for DOM ready, and dismisses any overlays.
+    Retries on transient network failures.
+    """
+    for attempt in range(retries + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=15000)
+            dismiss_overlays(page)
+            return
+        except Exception as e:
+            if attempt < retries:
+                time.sleep(2)
+            else:
+                raise e
+
+
+def login_and_save_session(username: str, password: str):
+    """
+    Handles logging in to Moodle programmatically.
+    Dismisses any popups/modals before interacting with the login form.
+    """
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=False)
             context = browser.new_context()
             page = context.new_page()
-            page.goto(LOGIN_URL)
-            
+
+            # Pre-set sessionStorage flags before navigating so modals never render
+            page.add_init_script("""() => {
+                try {
+                    sessionStorage.setItem('qr_encuesta_visto', '1');
+                    sessionStorage.setItem('encuesta_visto', '1');
+                    sessionStorage.setItem('aviso_visto', '1');
+                } catch(e) {}
+            }""")
+
+            safe_goto(page, LOGIN_URL)
+
+            # Fill credentials and submit
             page.fill("input#username", username)
             page.fill("input#password", password)
-            
             page.click("#loginbtn")
-            
-            try:
-                # Wait 15 seconds for successful login redirect
-                page.wait_for_url(lambda url: "login/index.php" not in url, timeout=15000)
 
+            try:
+                page.wait_for_url(lambda url: "login/index.php" not in url, timeout=15000)
             except Exception:
+                # Dismiss overlays in case a post-login popup appeared
+                dismiss_overlays(page)
+
                 error_locator = page.locator(".alert-danger, .loginerrors, #loginerrormessage")
                 if error_locator.count() > 0:
                     err_text = error_locator.first.inner_text().strip()
@@ -49,22 +194,25 @@ def login_and_save_session(username: str, password: str):
                 browser.close()
                 sys.exit(1)
 
+            # Dismiss any post-login popups/modals before saving session
+            dismiss_overlays(page)
+
             context.storage_state(path=STATE_FILE)
-            
             context.close()
             browser.close()
-            
+
     except Exception as e:
         print(f"Error during login flow: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 def get_assignment_details(page, assignment_url, fallback_title="Crea un titulo acorde a la asignación"):
     """
     Navigates to a specific assignment URL and extracts its title, description,
     course metadata, due date, and submission status.
     """
-    page.goto(assignment_url)
-    
+    safe_goto(page, assignment_url)
+
     # 1. Extract Title
     title = ""
     for selector in ["h1", "h2"]:
@@ -76,18 +224,18 @@ def get_assignment_details(page, assignment_url, fallback_title="Crea un titulo 
                 break
     if not title:
         title = fallback_title
-        
+
     # 2. Extract course code from breadcrumbs (e.g., "ECO-011-1.9332" -> "ECO-011-1")
     course_code = ""
     course_link = page.locator('ol.breadcrumb li.breadcrumb-item a[href*="course/view.php?id="]')
     if course_link.count() > 0:
         raw_course = course_link.first.inner_text().strip()
         course_code = raw_course.split(".")[0].split()[0]
-        
+
     # 3. Extract due and open dates
     open_date = "Unknown Open Date"
     due_date = "Unknown Due Date"
-    
+
     dates_locator = page.locator(".activity-dates")
     if dates_locator.count() > 0:
         lines = dates_locator.first.inner_text().strip().split("\n")
@@ -96,7 +244,7 @@ def get_assignment_details(page, assignment_url, fallback_title="Crea un titulo 
                 open_date = line.split("Apertura:")[1].strip()
             elif "Cierre" in line:
                 due_date = line.split("Cierre:")[1].strip()
-                
+
     # Fallback to submission status table for due date if not found in .activity-dates
     if due_date == "Unknown Due Date":
         try:
@@ -110,7 +258,7 @@ def get_assignment_details(page, assignment_url, fallback_title="Crea un titulo 
                         break
         except Exception:
             pass
-            
+
     # 4. Extract description/instructions text
     description = ""
     for selector in ["#intro", ".activitydescription", ".no-overflow", ".generalbox"]:
@@ -120,7 +268,49 @@ def get_assignment_details(page, assignment_url, fallback_title="Crea un titulo 
             if text:
                 description = text
                 break
-                
+
+    # 4.5 Extract & Download attached files (PDFs/Images)
+    try:
+        os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
+        file_links = page.locator('a[href*="pluginfile.php"], a[href*="introattachment"], .fileuploadsubmission a, .introattachments a').all()
+        downloaded_urls = set()
+
+        for link in file_links:
+            href = link.get_attribute("href")
+            if not href or href in downloaded_urls or "forcedownload=0" in href or "portfolio" in href:
+                continue
+
+            file_name = link.inner_text().strip()
+            if not file_name:
+                file_name = href.split("/")[-1].split("?")[0]
+
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext not in [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".docx", ".txt"]:
+                continue
+
+            downloaded_urls.add(href)
+
+            clean_filename = re.sub(r'[^\w\s.-]', '', file_name).replace(" ", "_")
+            attachment_file = os.path.join(ATTACHMENTS_DIR, clean_filename)
+
+            # Download using Playwright context request (inherits session cookies)
+            res = page.context.request.get(href)
+            if res.status == 200:
+                with open(attachment_file, "wb") as f:
+                    f.write(res.body())
+
+                extracted = extract_attachment_text(attachment_file)
+                if extracted:
+                    line_count = len(extracted.splitlines())
+                    attachment_block = (
+                        f"\n\n[INICIO ADJUNTO: {clean_filename} | {line_count} líneas]\n"
+                        f"{extracted}\n"
+                        f"[FIN ADJUNTO: {clean_filename}]\n"
+                    )
+                    description += attachment_block
+    except Exception as e:
+        print(f"Warning: Error extracting attachments for assignment: {e}", file=sys.stderr)
+
     # 5. Check if already submitted ("Enviado para calificar")
     is_submitted = False
     submission_status_loc = page.locator(".submissionstatussubmitted")
@@ -146,6 +336,7 @@ def get_assignment_details(page, assignment_url, fallback_title="Crea un titulo 
 
     return title, description, course_code, open_date, due_date, is_submitted
 
+
 def load_session_and_scrape():
     """
     Loads the saved session from state.json, navigates to the monthly calendar page,
@@ -161,40 +352,48 @@ def load_session_and_scrape():
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(storage_state=STATE_FILE)
             page = context.new_page()
-            
-            # Navigate directly to the calendar month view
-            page.goto(CALENDAR_URL)
-            
+
+            # Pre-set sessionStorage flags so modals never appear
+            page.add_init_script("""() => {
+                try {
+                    sessionStorage.setItem('qr_encuesta_visto', '1');
+                    sessionStorage.setItem('encuesta_visto', '1');
+                    sessionStorage.setItem('aviso_visto', '1');
+                } catch(e) {}
+            }""")
+
+            safe_goto(page, CALENDAR_URL)
+
             # Verify active session
             if "login/index.php" in page.url:
                 print("Error: Session has expired! Please run the login command again.", file=sys.stderr)
                 context.close()
                 browser.close()
                 sys.exit(1)
-                
+
             # Find links that go to assignments
             assignment_links = page.locator('a[href*="mod/assign/view.php?id="]')
             all_links = assignment_links.all()
-            
+
             # Deduplicate links using a dictionary
             unique_assignments = {}
             for link in all_links:
                 href = link.get_attribute("href")
                 if href:
                     clean_href = href.split("#")[0]
-                    
+
                     # Try to extract the title from the specific eventname element inside the link
                     eventname_locator = link.locator(".eventname")
                     if eventname_locator.count() > 0:
                         name = eventname_locator.first.inner_text().strip()
                     else:
                         name = link.inner_text().strip()
-                        
+
                     if clean_href not in unique_assignments or (name and not unique_assignments[clean_href]):
                         unique_assignments[clean_href] = name
-            
+
             scraped_data = []
-            
+
             # If no assignments are found, write an empty list to the JSON file
             if unique_assignments:
                 for url, name in unique_assignments.items():
@@ -203,7 +402,7 @@ def load_session_and_scrape():
                         if is_submitted:
                             # Skip already submitted assignments
                             continue
-                            
+
                         scraped_data.append({
                             "title": title,
                             "url": url,
@@ -216,21 +415,21 @@ def load_session_and_scrape():
                         })
                     except Exception as e:
                         print(f"Error scraping assignment {url}: {e}", file=sys.stderr)
-            
+
             # Ensure the output directory exists
             os.makedirs(DATA_DIR, exist_ok=True)
-            
+
             # Save the scraped assignments to a formatted JSON file
             with open(ASSIGNMENTS_FILE, "w", encoding="utf-8") as f:
                 json.dump(scraped_data, f, indent=2, ensure_ascii=False)
 
-                
             context.close()
             browser.close()
-            
+
     except Exception as e:
         print(f"Scraping failed: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "login":

@@ -7,6 +7,7 @@ import time
 import shutil
 import curses
 import textwrap
+import subprocess
 
 # Resolve absolute paths relative to this script's location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,11 +18,11 @@ if PROJECT_ROOT not in sys.path:
 
 from src.scraper import login_and_save_session, load_session_and_scrape, STATE_FILE
 from src.generator import curses_prompt_assignment, generate_assignment_draft, sanitize_filename, ASSIGNMENTS_FILE, DRAFTS_DIR
-from src.converter import convert_md_to_pdf, render_presentation_png, PDFS_DIR, PRESENTATIONS_DIR
+from src.converter import convert_md_to_pdf, render_presentation_png, PDFS_DIR, PRESENTATIONS_DIR, DEFAULT_OUTPUT_DIR
 from google import genai
 
-EXPORT_DIR = "/mnt/c/Users/frank/Downloads/Homework"
-EXPORT_FALLBACK = "/mnt/c/Users/frank/Downloads"
+HANDOFF_DIR = os.path.join(PROJECT_ROOT, "data", "agent_handoff")
+CONVERTER_FORMAT_FILE = os.path.join(PROJECT_ROOT, "CONVERTER_FORMAT.md")
 
 class BookishLogger:
     def __init__(self, stdscr):
@@ -56,7 +57,7 @@ class BookishLogger:
             return
 
         # Header Bar
-        header = " Bookish TUI | Flujo de Automatización Académica "
+        header = " Bookish TUI"
         self.stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
         self.stdscr.addstr(0, 0, header + " " * max(0, width - len(header) - 1))
         self.stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
@@ -100,23 +101,113 @@ class BookishLogger:
         self.stdscr.addstr(footer_y, 2, "Procesando tareas universitarias... Espere por favor.", curses.A_DIM)
         self.stdscr.refresh()
 
-def open_file_async(file_path):
-    import subprocess
-    try:
-        if shutil.which("wslview"):
-            subprocess.Popen(["wslview", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif shutil.which("xdg-open"):
-            subprocess.Popen(["xdg-open", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif shutil.which("open"):
-            subprocess.Popen(["open", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    pass
 
 def ensure_directories():
     os.makedirs(os.path.join(PROJECT_ROOT, "data"), exist_ok=True)
     os.makedirs(DRAFTS_DIR, exist_ok=True)
     os.makedirs(PDFS_DIR, exist_ok=True)
     os.makedirs(PRESENTATIONS_DIR, exist_ok=True)
+    os.makedirs(HANDOFF_DIR, exist_ok=True)
+
+
+def create_handoff_file(item):
+    """
+    Writes a full-context markdown file for an AI agent to pick up.
+    Includes assignment metadata, Moodle instructions, additional student instructions,
+    and CONVERTER_FORMAT.md rules.
+    Returns the absolute path to the handoff file.
+    """
+    title = item.get("title", "Sin Título")
+    course_code = item.get("course_code", "")
+    due_date = item.get("due_date", "Sin fecha límite")
+    description = item.get("description", "")
+    student_name = item.get("student_name", "Frankelly Cordero")
+    student_enrrolment = item.get("student_enrrolment", "2024-3153")
+    additional_info = item.get("additional_info", "")
+    safe_title = sanitize_filename(title)
+    output_draft = os.path.join(DRAFTS_DIR, f"{safe_title}.md")
+
+    # Read CONVERTER_FORMAT.md rules
+    format_rules = ""
+    if os.path.exists(CONVERTER_FORMAT_FILE):
+        with open(CONVERTER_FORMAT_FILE, "r", encoding="utf-8") as f:
+            format_rules = f.read()
+
+    additional_section = ""
+    if additional_info:
+        additional_section = f"## Contexto / Instrucciones Adicionales del Estudiante\n\n{additional_info}\n\n---\n\n"
+
+    handoff_content = (
+        f"# Contexto de Asignación — Handoff para Agente IA\n\n"
+        f"## Metadatos\n"
+        f"- **Asignatura:** {course_code}\n"
+        f"- **Tarea:** {title}\n"
+        f"- **Estudiante:** {student_name}\n"
+        f"- **Matrícula:** {student_enrrolment}\n"
+        f"- **Fecha Límite:** {due_date}\n\n"
+        f"---\n\n"
+        f"## Instrucciones de Moodle\n\n"
+        f"{description}\n\n"
+        f"---\n\n"
+        f"{additional_section}"
+        f"## Instrucciones para el Agente\n\n"
+        f"Genera el borrador de esta asignación en formato Markdown.\n"
+        f"Guarda el resultado en: `{output_draft}`\n\n"
+        f"Sigue ESTRICTAMENTE las reglas de formato que están debajo (CONVERTER_FORMAT.md). "
+        f"El archivo .md será convertido a PDF por el sistema Bookish.\n\n"
+        f"---\n\n"
+        f"## Reglas de Formato (CONVERTER_FORMAT.md)\n\n"
+        f"{format_rules}\n"
+    )
+
+    handoff_path = os.path.join(HANDOFF_DIR, f"{safe_title}.md")
+    with open(handoff_path, "w", encoding="utf-8") as f:
+        f.write(handoff_content)
+
+    return handoff_path, output_draft
+
+
+def launch_agent(stdscr, agent_cmd, handoff_path, output_draft, title):
+    """
+    Exits curses, launches an AI agent CLI as a subprocess with the handoff file
+    as initial context, then resumes curses when the agent exits.
+    """
+    curses.endwin()
+
+    print(f"\n{'=' * 60}")
+    print(f"  📄 Tarea: {title}")
+    print(f"  📁 Contexto guardado en: {handoff_path}")
+    print(f"  📝 Archivo de salida esperado: {output_draft}")
+    print(f"  🚀 Lanzando {agent_cmd}...")
+    print(f"{'=' * 60}\n")
+
+    initial_prompt = (
+        f"Lee el archivo @[{handoff_path}] y genera el borrador de la asignación "
+        f"siguiendo las instrucciones y reglas de formato que contiene. "
+        f"Guarda el resultado en {output_draft}"
+    )
+
+    # Build command per agent CLI interface:
+    #   agy --dangerously-skip-permissions <prompt>  → auto-approves tool calls outside project root
+    #   opencode run --auto <prompt>                 → auto-approves permissions in opencode
+    if agent_cmd == "opencode":
+        cmd = [agent_cmd, "run", "--auto", initial_prompt]
+    else:
+        cmd = [agent_cmd, "--dangerously-skip-permissions", initial_prompt]
+
+    try:
+        subprocess.run(cmd, cwd=PROJECT_ROOT)
+    except FileNotFoundError:
+        print(f"\n  ✗ Error: '{agent_cmd}' no está instalado o no está en el PATH.")
+        print(f"    Instálalo y vuelve a intentar.")
+        input("\n  Presiona Enter para continuar...")
+    except Exception as e:
+        print(f"\n  ✗ Error lanzando {agent_cmd}: {e}")
+        input("\n  Presiona Enter para continuar...")
+
+    # Resume curses
+    stdscr.refresh()
 
 def run_bookish_pipeline(stdscr):
     logger = BookishLogger(stdscr)
@@ -192,6 +283,8 @@ def run_bookish_pipeline(stdscr):
 
     approved_drafts = []
     approved_presentations = []
+    agent_handoffs = []  # Items sent to external agents
+    session_generated_mds = []  # Track Markdown files created/updated in THIS session
 
     total_pending = len(pending_items)
     for idx, item in enumerate(pending_items, 1):
@@ -205,8 +298,25 @@ def run_bookish_pipeline(stdscr):
             approved_drafts.append(item)
         elif action == "presentation":
             approved_presentations.append(item)
+        elif action in ("agent_agy", "agent_opencode"):
+            item["additional_info"] = additional_info
+            agent_cmd = "agy" if action == "agent_agy" else "opencode"
+            title = item.get("title", "Sin Título")
+            logger.log(f"Preparando handoff para '{title}' → {agent_cmd}...", "info")
+            handoff_path, output_draft = create_handoff_file(item)
+            launch_agent(stdscr, agent_cmd, handoff_path, output_draft, title)
+            agent_handoffs.append(item)
+            if os.path.exists(output_draft):
+                session_generated_mds.append(output_draft)
 
-    logger.log(f"Cuestionario completado: {len(approved_drafts)} borradores, {len(approved_presentations)} presentaciones solo-PNG.", "success")
+    summary_parts = []
+    if approved_drafts:
+        summary_parts.append(f"{len(approved_drafts)} borradores")
+    if approved_presentations:
+        summary_parts.append(f"{len(approved_presentations)} presentaciones")
+    if agent_handoffs:
+        summary_parts.append(f"{len(agent_handoffs)} enviadas a agente externo")
+    logger.log(f"Cuestionario completado: {', '.join(summary_parts) if summary_parts else 'ninguna tarea seleccionada'}.", "success")
     time.sleep(1)
 
     # Step 4: Generate Presentations Only (P)
@@ -265,6 +375,7 @@ def run_bookish_pipeline(stdscr):
                             f.write(header + draft_content)
 
                         logger.log(f"✓ Guardado borrador Markdown: {os.path.basename(output_file)}", "success")
+                        session_generated_mds.append(output_file)
 
                     except Exception as e:
                         logger.log(f"✗ Error al generar borrador para '{title}': {e}", "error")
@@ -272,53 +383,21 @@ def run_bookish_pipeline(stdscr):
             except Exception as e:
                 logger.log(f"Error inicializando cliente Gemini: {e}", "error")
 
-    # Step 6: Convert Markdown Drafts to PDF
-    if glob.glob(os.path.join(DRAFTS_DIR, "*.md")):
-        logger.log("[6/6] Convirtiendo borradores Markdown a PDF...", "step")
-        try:
-            convert_md_to_pdf()
-            logger.log("✓ Conversión a PDF completada.", "success")
-        except Exception as e:
-            logger.log(f"✗ Error convirtiendo PDFs: {e}", "error")
-
-    # Step 7: Export & Open files
-    logger.log("Abriendo y moviendo archivos generados a Descargas...", "step")
-    target_dir = EXPORT_DIR if os.path.exists(os.path.dirname(EXPORT_DIR)) else EXPORT_FALLBACK
-    os.makedirs(target_dir, exist_ok=True)
-
-    moved_count = 0
-
-    # Handle PDFs
-    pdf_files = glob.glob(os.path.join(PDFS_DIR, "*.pdf"))
-    if pdf_files:
-        for pdf_file in pdf_files:
-            open_file_async(pdf_file)
-            dest_file = os.path.join(target_dir, os.path.basename(pdf_file))
+    # Step 6: Convert ONLY Markdown Drafts generated in this session to PDF
+    if session_generated_mds:
+        logger.log(f"[6/6] Convirtiendo {len(session_generated_mds)} borrador(es) de la sesión actual a PDF...", "step")
+        for md_file in session_generated_mds:
             try:
-                shutil.move(pdf_file, dest_file)
-                moved_count += 1
+                convert_md_to_pdf(target=md_file)
+                logger.log(f"✓ Guardado y abierto PDF: {os.path.basename(md_file).replace('.md', '.pdf')}", "success")
             except Exception as e:
-                logger.log(f"Error moviendo {os.path.basename(pdf_file)}: {e}", "error")
+                logger.log(f"✗ Error convirtiendo '{os.path.basename(md_file)}': {e}", "error")
     else:
-        logger.log("No hay PDFs para mover.", "info")
+        logger.log("[6/6] No hay borradores generados en esta sesión para convertir a PDF.", "info")
 
-    # Handle Presentations PNGs
-    png_files = glob.glob(os.path.join(PRESENTATIONS_DIR, "*.png"))
-    if png_files:
-        for png_file in png_files:
-            open_file_async(png_file)
-            dest_file = os.path.join(target_dir, os.path.basename(png_file))
-            try:
-                shutil.move(png_file, dest_file)
-                moved_count += 1
-            except Exception as e:
-                logger.log(f"Error moviendo {os.path.basename(png_file)}: {e}", "error")
-    else:
-        logger.log("No hay presentaciones PNG para mover.", "info")
-
-    logger.log(f"✓ Movidos {moved_count} archivo(s) a '{target_dir}'.", "success")
     logger.log("=========================================", "info")
     logger.log("  ¡Proceso completado con éxito!", "success")
+    logger.log(f"  Archivos en: {DEFAULT_OUTPUT_DIR}", "info")
     logger.log("=========================================", "info")
 
     # Final Wait for exit

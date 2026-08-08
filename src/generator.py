@@ -5,6 +5,8 @@ import re
 import time
 import curses
 import textwrap
+import tempfile
+import subprocess
 from google import genai # generative AI
 from google.genai import types
 
@@ -103,6 +105,43 @@ def wrap_text(text, width):
             wrapped_lines.extend(textwrap.wrap(paragraph, width=width))
     return wrapped_lines
 
+def open_external_editor(stdscr, title):
+    """
+    Exits curses, opens $EDITOR (or vim/nano) with a completely blank temp file,
+    reads the saved text upon exit, cleans up the temp file, and resumes curses.
+    """
+    curses.endwin()
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vim"
+
+    with tempfile.NamedTemporaryFile(suffix=".md", mode="w+", delete=False, encoding="utf-8") as tf:
+        temp_path = tf.name
+
+    try:
+        subprocess.run([editor, temp_path])
+        with open(temp_path, "r", encoding="utf-8") as f:
+            result = f.read().strip()
+    except Exception:
+        result = ""
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    stdscr.refresh()
+    return result
+
+def format_description_for_tui(raw_description):
+    """
+    Replaces long [INICIO ADJUNTO: filename | N líneas] ... [FIN ADJUNTO] blocks
+    with a compact summary indicator tag for the TUI display, keeping the TUI clean.
+    """
+    pattern = r'\[INICIO ADJUNTO:\s*([^\]]+?)\s*\|\s*(\d+)\s*líneas\][\s\S]*?\[FIN ADJUNTO:[^\]]*\]'
+    def _replace(match):
+        filename = match.group(1).strip()
+        lines = match.group(2).strip()
+        return f"\n[📄 Adjunto: {filename} ({lines} líneas extraídas) — Texto completo incluido en borrador]\n"
+
+    return re.sub(pattern, _replace, raw_description)
+
 def curses_prompt_assignment(stdscr, item, index, total):
     """
     Renders a beautiful scrollable curses interface for a single assignment choice.
@@ -167,10 +206,11 @@ def curses_prompt_assignment(stdscr, item, index, total):
 
         # Scrollable description box
         wrap_width = max(10, width - 6)
-        wrapped_lines = wrap_text(description, wrap_width)
+        tui_description = format_description_for_tui(description)
+        wrapped_lines = wrap_text(tui_description, wrap_width)
         
         # Max view height available for descriptions
-        desc_height = height - 11
+        desc_height = height - 10
         if desc_height < 1:
             desc_height = 1
 
@@ -189,18 +229,22 @@ def curses_prompt_assignment(stdscr, item, index, total):
             indicator = f" [Líneas {scroll_pos+1}-{min(scroll_pos+desc_height, len(wrapped_lines))} de {len(wrapped_lines)}] [↑/↓ para subir/bajar] "
             stdscr.addstr(6, max(20, width - len(indicator) - 2), indicator, curses.A_DIM)
 
-        # Draw action bar
+        # Draw single-line action bar
         footer_y = height - 2
         stdscr.addstr(footer_y, 2, "─" * (width - 4))
 
         action_y = height - 1
         stdscr.addstr(action_y, 2, "[")
         stdscr.addstr("Y", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Borrador IA   [")
+        stdscr.addstr("] Borrador IA  [")
         stdscr.addstr("P", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Presentación (PNG)   [")
+        stdscr.addstr("] Presentación  [")
+        stdscr.addstr("A", curses.color_pair(3) | curses.A_BOLD)
+        stdscr.addstr("] AGY  [")
+        stdscr.addstr("O", curses.color_pair(3) | curses.A_BOLD)
+        stdscr.addstr("] OpenCode  [")
         stdscr.addstr("N", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Omitir   [")
+        stdscr.addstr("] Omitir  [")
         stdscr.addstr("Q", curses.color_pair(3) | curses.A_BOLD)
         stdscr.addstr("] Salir")
 
@@ -218,25 +262,16 @@ def curses_prompt_assignment(stdscr, item, index, total):
         elif ch == curses.KEY_NPAGE:
             scroll_pos = min(max_scroll, scroll_pos + desc_height)
         elif ch in [ord('y'), ord('Y'), 10, 13]: # Y or Enter keys
-            # Temporarily exit curses to use regular input() (supports paste)
-            curses.endwin()
-
-            print(f"\n  Tarea: {title}")
-            print(f"  ¿Desea agregar instrucciones o detalles adicionales para Gemini?")
-            print(f"  (Presione Enter sin escribir nada para omitir)\n")
-
-            additional_info = ""
-            try:
-                additional_info = input("  > ").strip()
-            except (KeyboardInterrupt, EOFError):
-                pass
-
-            # Resume curses
-            stdscr.refresh()
-
+            additional_info = open_external_editor(stdscr, title)
             return "yes", additional_info
         elif ch in [ord('p'), ord('P')]:
             return "presentation", ""
+        elif ch in [ord('a'), ord('A')]:
+            additional_info = open_external_editor(stdscr, title)
+            return "agent_agy", additional_info
+        elif ch in [ord('o'), ord('O')]:
+            additional_info = open_external_editor(stdscr, title)
+            return "agent_opencode", additional_info
         elif ch in [ord('n'), ord('N')]:
             return "no", ""
         elif ch in [ord('q'), ord('Q')]:

@@ -2,6 +2,8 @@ import os
 import sys
 import glob
 import re
+import shutil
+import subprocess
 import markdown  # pyright: ignore[reportMissingModuleSource]
 from playwright.sync_api import sync_playwright
 
@@ -10,8 +12,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
 DRAFTS_DIR = os.path.join(PROJECT_ROOT, "data", "drafts")
-PDFS_DIR = os.path.join(PROJECT_ROOT, "data", "pdfs")
-PRESENTATIONS_DIR = os.path.join(PROJECT_ROOT, "data", "presentations")
+
+# Default output: directly to Windows Downloads/bookish
+DEFAULT_OUTPUT_DIR = "/mnt/c/Users/frank/Downloads/bookish"
+PDFS_DIR = DEFAULT_OUTPUT_DIR
+PRESENTATIONS_DIR = DEFAULT_OUTPUT_DIR
 
 # HTML Template with styling for academic PDF look
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -326,24 +331,57 @@ def preprocess_markdown(md_content):
     return content_no_moodle
 
 
-def convert_md_to_pdf():
+def open_file_async(file_path):
     """
-    Finds all Markdown files in DRAFTS_DIR, converts them to HTML + CSS,
-    and uses Playwright to render them as PDFs.
+    Opens a file with the system's default application (non-blocking).
     """
-    if not os.path.exists(DRAFTS_DIR):
-        print(f"Error: Drafts directory not found at '{DRAFTS_DIR}'. Please run generator first.", file=sys.stderr)
+    try:
+        if shutil.which("wslview"):
+            subprocess.Popen(["wslview", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif shutil.which("xdg-open"):
+            subprocess.Popen(["xdg-open", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif shutil.which("open"):
+            subprocess.Popen(["open", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def convert_md_to_pdf(target=None, output_dest=None):
+    """
+    Converts Markdown files to PDF using Playwright.
+    - If target is None: processes all .md files in DRAFTS_DIR -> DEFAULT_OUTPUT_DIR.
+    - If target is a directory: processes all .md files in that directory.
+    - If target is a single file: processes that specific .md file.
+    Each PDF is opened automatically after conversion.
+    """
+    md_files = []
+    
+    if target is None:
+        if not os.path.exists(DRAFTS_DIR):
+            print(f"Error: Drafts directory not found at '{DRAFTS_DIR}'. Please run generator first.", file=sys.stderr)
+            sys.exit(1)
+        os.makedirs(PDFS_DIR, exist_ok=True)
+        md_files = glob.glob(os.path.join(DRAFTS_DIR, "*.md"))
+        default_out_dir = PDFS_DIR
+    elif os.path.isdir(target):
+        target_dir = os.path.abspath(target)
+        default_out_dir = os.path.abspath(output_dest) if output_dest else target_dir
+        os.makedirs(default_out_dir, exist_ok=True)
+        md_files = glob.glob(os.path.join(target_dir, "*.md"))
+    elif os.path.isfile(target):
+        target_file = os.path.abspath(target)
+        default_out_dir = os.path.abspath(output_dest) if output_dest else PDFS_DIR
+        os.makedirs(default_out_dir, exist_ok=True)
+        md_files = [target_file]
+    else:
+        print(f"Error: Target route '{target}' does not exist.", file=sys.stderr)
         sys.exit(1)
-        
-    os.makedirs(PDFS_DIR, exist_ok=True)
-    
-    md_files = glob.glob(os.path.join(DRAFTS_DIR, "*.md"))
-    
+
     if not md_files:
-        print("No drafts found to convert.", file=sys.stderr)
+        print("No Markdown files found to convert.", file=sys.stderr)
         return
 
-    print(f"Found {len(md_files)} drafts. Starting PDF conversion...", file=sys.stderr)
+    print(f"Found {len(md_files)} file(s). Starting PDF conversion...", file=sys.stderr)
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -351,8 +389,14 @@ def convert_md_to_pdf():
         
         for md_path in md_files:
             file_name = os.path.basename(md_path)
-            title = os.path.splitext(file_name)[0]
-            pdf_path = os.path.join(PDFS_DIR, f"{title}.pdf")
+            title_base = os.path.splitext(file_name)[0]
+            
+            if target is not None and os.path.isfile(target) and output_dest and not os.path.isdir(output_dest):
+                pdf_path = os.path.abspath(output_dest)
+            else:
+                pdf_path = os.path.join(default_out_dir, f"{title_base}.pdf")
+            
+            base_dir = os.path.dirname(os.path.abspath(md_path))
             
             try:
                 print(f"Converting '{file_name}' to PDF...", file=sys.stderr)
@@ -372,10 +416,10 @@ def convert_md_to_pdf():
                 html_body = markdown.markdown(md_content, extensions=['fenced_code', 'tables'])
                 
                 # Render inside our styled template
-                full_html = HTML_TEMPLATE.format(title=title.replace("_", " ").title(), content=html_body)
+                full_html = HTML_TEMPLATE.format(title=title_base.replace("_", " ").title(), content=html_body)
                 
-                # Inline all images (logo, screenshots, etc.) as base64 data URIs
-                full_html = inline_images(full_html)
+                # Inline all images (logo, screenshots, relative/absolute images) as Base64 Data URIs
+                full_html = inline_images(full_html, base_dir=base_dir)
                 
                 # Set page content
                 page.set_content(full_html)
@@ -389,6 +433,7 @@ def convert_md_to_pdf():
                     margin={"top": "1.0in", "bottom": "1.0in", "left": "1.0in", "right": "1.0in"}
                 )
                 print(f"✓ Saved PDF: {pdf_path}", file=sys.stderr)
+                open_file_async(pdf_path)
                 
             except Exception as e:
                 print(f"✗ Error converting '{file_name}': {e}", file=sys.stderr)
@@ -396,47 +441,72 @@ def convert_md_to_pdf():
         browser.close()
         print("PDF conversion completed successfully!", file=sys.stderr)
 
-def image_data_uri(filename):
+
+def image_data_uri(src, base_dir=None):
     """
-    Returns a base64 data URI for an image located in data/images/,
-    or the original filename if the image is not found.
+    Returns a base64 data URI for an image resolved from:
+    1. Base directory (markdown file location)
+    2. Absolute or relative path
+    3. data/images/ fallback folder
     """
-    if not filename or filename.startswith("data:"):
-        return filename
+    if not src or src.startswith("data:") or src.startswith("http://") or src.startswith("https://"):
+        return src
+
+    resolved = None
 
     # Backwards compatibility: "logo.jpeg" maps to the UCE logo file
-    if filename == "logo.jpeg":
-        filename = "Universidad_Central_del_Este.jpeg"
+    if src == "logo.jpeg":
+        resolved = os.path.join(PROJECT_ROOT, "data", "images", "Universidad_Central_del_Este.jpeg")
+    else:
+        # Check Candidate 1: relative to base_dir
+        if base_dir:
+            cand = os.path.abspath(os.path.join(base_dir, src))
+            if os.path.exists(cand):
+                resolved = cand
 
-    img_path = os.path.join(PROJECT_ROOT, "data", "images", filename)
-    if not os.path.exists(img_path):
-        print(f"Warning: Image not found at '{img_path}'", file=sys.stderr)
-        return filename
+        # Check Candidate 2: direct path or relative to CWD
+        if not resolved and os.path.exists(src):
+            resolved = os.path.abspath(src)
+
+        # Check Candidate 3: inside data/images/
+        if not resolved:
+            cand = os.path.join(PROJECT_ROOT, "data", "images", src)
+            if os.path.exists(cand):
+                resolved = cand
+
+    if not resolved or not os.path.exists(resolved):
+        print(f"Warning: Image '{src}' not found", file=sys.stderr)
+        return src
 
     import base64
+    ext = os.path.splitext(resolved)[1].lower()
     mime_map = {
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".png": "image/png",
         ".gif": "image/gif",
+        ".svg": "image/svg+xml",
         ".webp": "image/webp",
     }
-    mime = mime_map.get(os.path.splitext(filename)[1].lower(), "image/png")
-    with open(img_path, "rb") as img_file:
-        b64_str = base64.b64encode(img_file.read()).decode('utf-8')
-    return f"data:{mime};base64,{b64_str}"
+    mime = mime_map.get(ext, "image/png")
+    try:
+        with open(resolved, "rb") as img_file:
+            b64_str = base64.b64encode(img_file.read()).decode('utf-8')
+        return f"data:{mime};base64,{b64_str}"
+    except Exception as e:
+        print(f"Warning: Could not encode image '{resolved}': {e}", file=sys.stderr)
+        return src
 
 
-def inline_images(html):
+def inline_images(html, base_dir=None):
     """
-    Replaces every src="<filename>" reference in the HTML with a base64 data URI
-    resolved from data/images/.
+    Replaces every src="..." or src='...' reference in the HTML with a base64 data URI.
     """
     def _replace(match):
         src = match.group(1)
-        return f'src="{image_data_uri(src)}"'
+        return f'src="{image_data_uri(src, base_dir=base_dir)}"'
 
-    return re.sub(r'src="([^"]+)"', _replace, html)
+    return re.sub(r'src=["\']([^"\']+)["\']', _replace, html)
 
 
 def sanitize_filename(filename):
@@ -447,10 +517,13 @@ def sanitize_filename(filename):
     clean = re.sub(r'[-\s]+', '_', clean)
     return clean.strip().lower()
 
+
 def render_presentation_png(item, output_path=None):
     """
-    Renders an assignment cover page / presentation sheet as a PNG image in data/presentations/.
+    Renders an assignment cover page / presentation sheet as a PNG image.
+    Output defaults to DEFAULT_OUTPUT_DIR (/mnt/c/Users/frank/Downloads/bookish).
     'item' dict keys: title, course_code, student_name, student_enrrolment, due_date.
+    Opens the PNG automatically after rendering.
     """
     os.makedirs(PRESENTATIONS_DIR, exist_ok=True)
     
@@ -487,8 +560,13 @@ def render_presentation_png(item, output_path=None):
         page.locator(".cover-page").screenshot(path=output_path)
         browser.close()
 
+    open_file_async(output_path)
     return output_path
 
+
 if __name__ == "__main__":
-    convert_md_to_pdf()
+    target_route = sys.argv[1] if len(sys.argv) > 1 else None
+    output_route = sys.argv[2] if len(sys.argv) > 2 else None
+    convert_md_to_pdf(target=target_route, output_dest=output_route)
+
 
