@@ -10,17 +10,23 @@ build/
 venv/
 env/
 
-# Sensitive data
+# Sensitive data and Moodle session states
 state.json
 
-data/
-# IDE
+# Generated application data
+data/assignments.json
+data/drafts/*
+data/attachments/*
+data/agent_handoff/*
+data/pdfs/*
+data/presentations/*
+data/images/*
+!data/images/Universidad_Central_del_Este.jpeg
+
+# IDE and OS files
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
-pyproject.toml
