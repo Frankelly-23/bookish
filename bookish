@@ -1,14 +1,13 @@
 #!/bin/bash
+set -e
 
-set -e # exit on any error (non-zero exit code)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+cd "$SCRIPT_DIR"
 
-BOOKISH_DIR="/home/thegxnster/py/bookish"
-cd "$BOOKISH_DIR"
-
-if [ -f "$BOOKISH_DIR/.venv/bin/python3" ]; then
-    PYTHON_BIN="$BOOKISH_DIR/.venv/bin/python3"
+if [ -f "$SCRIPT_DIR/.venv/bin/python3" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python3"
 else
     PYTHON_BIN="python3"
 fi
 
-exec "$PYTHON_BIN" "$BOOKISH_DIR/src/bookish.py" "$@"
+exec "$PYTHON_BIN" "$SCRIPT_DIR/src/bookish.py" "$@"
