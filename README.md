@@ -34,9 +34,9 @@ Bookish executes a 7-stage sequential pipeline managed by `src/bookish.py`:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Stage 1: Authentication & Overlay Suppression (scraper.py)              │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ Stage 2: Calendar Scraping & Attachment OCR (scraper.py)                 │
+│ Stage 2: Calendar Scraping & Attachment OCR (scraper.py)                │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ Stage 3: Interactive TUI Questionnaire (generator.py)                    │
+│ Stage 3: Interactive TUI Questionnaire (generator.py)                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ Stage 4: External Editor Context Input ($EDITOR / vim)                  │
 ├─────────────────────────────────────────────────────────────────────────┤
