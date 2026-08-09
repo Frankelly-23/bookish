@@ -2,7 +2,17 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-cd "$SCRIPT_DIR"
+
+# Load configuration file if present
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+elif [ -f "$HOME/.config/bookish/env" ]; then
+    set -a
+    source "$HOME/.config/bookish/env"
+    set +a
+fi
 
 if [ -f "$SCRIPT_DIR/.venv/bin/python3" ]; then
     PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python3"
@@ -10,4 +20,4 @@ else
     PYTHON_BIN="python3"
 fi
 
-exec "$PYTHON_BIN" "$SCRIPT_DIR/src/bookish.py" "$@"
+exec "$PYTHON_BIN" -m bookish_pkg.pipeline "$@"

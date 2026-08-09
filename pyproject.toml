@@ -1,3 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bookish"
+version = "2.0.0"
+description = "Academic automation engine for UCE Moodle -- scrapes assignments, generates drafts, converts to PDF."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Frankelly Cordero"},
+]
+
+dependencies = [
+    "playwright~=1.40",
+    "beautifulsoup4~=4.12",
+    "lxml~=4.9",
+    "google-genai~=1.0",
+    "pymupdf~=1.24",
+    "pytesseract~=0.3.10",
+    "Pillow~=10.0",
+    "youtube-transcript-api~=1.0",
+    "markdown~=3.5",
+]
+
+[project.scripts]
+bookish = "bookish_pkg.pipeline:main"
+
+[tool.setuptools.packages.find]
+include = ["bookish_pkg*"]
+
 [tool.basedpyright]
 reportUnusedCallResult = "none"
 reportUnknownMemberType = "none"

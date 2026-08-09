@@ -2,21 +2,26 @@ import os
 import sys
 import glob
 import re
-import shutil
-import subprocess
-import markdown  # pyright: ignore[reportMissingModuleSource]
-from playwright.sync_api import sync_playwright
+import logging
 
-# Resolve absolute paths relative to this script's location
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+from bookish_pkg.config import (
+    DRAFTS_DIR,
+    PDFS_DIR,
+    PRESENTATIONS_DIR,
+    DEFAULT_OUTPUT_DIR,
+    PROJECT_ROOT,
+    STUDENT_NAME,
+    STUDENT_ENROLMENT,
+)
+from bookish_pkg.utils import (
+    sanitize_filename,
+    open_file_async,
+    build_cover_page_html,
+    image_data_uri,
+    inline_images
+)
 
-DRAFTS_DIR = os.path.join(PROJECT_ROOT, "data", "drafts")
-
-# Default output: directly to Windows Downloads/bookish
-DEFAULT_OUTPUT_DIR = "/mnt/c/Users/frank/Downloads/bookish"
-PDFS_DIR = DEFAULT_OUTPUT_DIR
-PRESENTATIONS_DIR = DEFAULT_OUTPUT_DIR
+log = logging.getLogger(__name__)
 
 # HTML Template with styling for academic PDF look
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -304,18 +309,16 @@ def preprocess_markdown(md_content):
                     break
                     
         # Construct cover page
-        new_header = (
-            f"<div class=\"cover-page\">\n"
-            f"  <img src=\"logo.jpeg\" alt=\"Universidad Central del Este\" class=\"cover-logo\" />\n"
-            f"  <h2>Facultad de Ciencias e Ingenierías</h2>\n"
-            f"  <h3>Escuela de Ingeniería de Software</h3>\n\n"
-            f"  <p><strong>Asignatura:</strong> {details['Asignatura']}</p>\n"
-            f"  <p><strong>Asignación:</strong> {details['Asignación']}</p>\n"
-            f"  <p><strong>Estudiante:</strong> {details['Estudiante']}</p>\n"
-            f"  <p><strong>Matrícula:</strong> {details['Matrícula']}</p>\n"
-            f"  <p><strong>Fecha Límite:</strong> {details['Fecha Límite']}</p>\n"
-            f"</div>\n\n"
+        new_header = build_cover_page_html(
+            course_code=details['Asignatura'],
+            title=details['Asignación'],
+            student_name=details['Estudiante'],
+            student_enrolment=details['Matrícula'],
+            due_date=details['Fecha Límite']
         )
+        # build_cover_page_html returns the block ending with \n</div>\n
+        # Append an extra newline to match original behavior
+        new_header += "\n"
         
         # Clean redundant headers in first few body lines
         clean_body = []
@@ -331,21 +334,6 @@ def preprocess_markdown(md_content):
     return content_no_moodle
 
 
-def open_file_async(file_path):
-    """
-    Opens a file with the system's default application (non-blocking).
-    """
-    try:
-        if shutil.which("wslview"):
-            subprocess.Popen(["wslview", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif shutil.which("xdg-open"):
-            subprocess.Popen(["xdg-open", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif shutil.which("open"):
-            subprocess.Popen(["open", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-
-
 def convert_md_to_pdf(target=None, output_dest=None):
     """
     Converts Markdown files to PDF using Playwright.
@@ -354,12 +342,14 @@ def convert_md_to_pdf(target=None, output_dest=None):
     - If target is a single file: processes that specific .md file.
     Each PDF is opened automatically after conversion.
     """
+    import markdown  # pyright: ignore[reportMissingModuleSource]
+    from playwright.sync_api import sync_playwright
+
     md_files = []
     
     if target is None:
         if not os.path.exists(DRAFTS_DIR):
-            print(f"Error: Drafts directory not found at '{DRAFTS_DIR}'. Please run generator first.", file=sys.stderr)
-            sys.exit(1)
+            raise FileNotFoundError(f"Error: Drafts directory not found at '{DRAFTS_DIR}'. Please run generator first.")
         os.makedirs(PDFS_DIR, exist_ok=True)
         md_files = glob.glob(os.path.join(DRAFTS_DIR, "*.md"))
         default_out_dir = PDFS_DIR
@@ -374,14 +364,13 @@ def convert_md_to_pdf(target=None, output_dest=None):
         os.makedirs(default_out_dir, exist_ok=True)
         md_files = [target_file]
     else:
-        print(f"Error: Target route '{target}' does not exist.", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"Error: Target route '{target}' does not exist.")
 
     if not md_files:
-        print("No Markdown files found to convert.", file=sys.stderr)
+        log.warning("No Markdown files found to convert.")
         return
 
-    print(f"Found {len(md_files)} file(s). Starting PDF conversion...", file=sys.stderr)
+    log.info(f"Found {len(md_files)} file(s). Starting PDF conversion...")
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -399,7 +388,7 @@ def convert_md_to_pdf(target=None, output_dest=None):
             base_dir = os.path.dirname(os.path.abspath(md_path))
             
             try:
-                print(f"Converting '{file_name}' to PDF...", file=sys.stderr)
+                log.info(f"Converting '{file_name}' to PDF...")
                 
                 with open(md_path, "r", encoding="utf-8") as f:
                     raw_content = f.read()
@@ -432,90 +421,14 @@ def convert_md_to_pdf(target=None, output_dest=None):
                     display_header_footer=False,
                     margin={"top": "1.0in", "bottom": "1.0in", "left": "1.0in", "right": "1.0in"}
                 )
-                print(f"✓ Saved PDF: {pdf_path}", file=sys.stderr)
+                log.info(f"✓ Saved PDF: {pdf_path}")
                 open_file_async(pdf_path)
                 
             except Exception as e:
-                print(f"✗ Error converting '{file_name}': {e}", file=sys.stderr)
+                log.error(f"✗ Error converting '{file_name}': {e}")
                 
         browser.close()
-        print("PDF conversion completed successfully!", file=sys.stderr)
-
-
-def image_data_uri(src, base_dir=None):
-    """
-    Returns a base64 data URI for an image resolved from:
-    1. Base directory (markdown file location)
-    2. Absolute or relative path
-    3. data/images/ fallback folder
-    """
-    if not src or src.startswith("data:") or src.startswith("http://") or src.startswith("https://"):
-        return src
-
-    resolved = None
-
-    # Backwards compatibility: "logo.jpeg" maps to the UCE logo file
-    if src == "logo.jpeg":
-        resolved = os.path.join(PROJECT_ROOT, "data", "images", "Universidad_Central_del_Este.jpeg")
-    else:
-        # Check Candidate 1: relative to base_dir
-        if base_dir:
-            cand = os.path.abspath(os.path.join(base_dir, src))
-            if os.path.exists(cand):
-                resolved = cand
-
-        # Check Candidate 2: direct path or relative to CWD
-        if not resolved and os.path.exists(src):
-            resolved = os.path.abspath(src)
-
-        # Check Candidate 3: inside data/images/
-        if not resolved:
-            cand = os.path.join(PROJECT_ROOT, "data", "images", src)
-            if os.path.exists(cand):
-                resolved = cand
-
-    if not resolved or not os.path.exists(resolved):
-        print(f"Warning: Image '{src}' not found", file=sys.stderr)
-        return src
-
-    import base64
-    ext = os.path.splitext(resolved)[1].lower()
-    mime_map = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".svg": "image/svg+xml",
-        ".webp": "image/webp",
-    }
-    mime = mime_map.get(ext, "image/png")
-    try:
-        with open(resolved, "rb") as img_file:
-            b64_str = base64.b64encode(img_file.read()).decode('utf-8')
-        return f"data:{mime};base64,{b64_str}"
-    except Exception as e:
-        print(f"Warning: Could not encode image '{resolved}': {e}", file=sys.stderr)
-        return src
-
-
-def inline_images(html, base_dir=None):
-    """
-    Replaces every src="..." or src='...' reference in the HTML with a base64 data URI.
-    """
-    def _replace(match):
-        src = match.group(1)
-        return f'src="{image_data_uri(src, base_dir=base_dir)}"'
-
-    return re.sub(r'src=["\']([^"\']+)["\']', _replace, html)
-
-
-def sanitize_filename(filename):
-    """
-    Cleans a string to make it safe for use as a file name.
-    """
-    clean = re.sub(r'[^\w\s-]', '', filename)
-    clean = re.sub(r'[-\s]+', '_', clean)
-    return clean.strip().lower()
+        log.info("PDF conversion completed successfully!")
 
 
 def render_presentation_png(item, output_path=None):
@@ -525,29 +438,26 @@ def render_presentation_png(item, output_path=None):
     'item' dict keys: title, course_code, student_name, student_enrrolment, due_date.
     Opens the PNG automatically after rendering.
     """
+    from playwright.sync_api import sync_playwright
+
     os.makedirs(PRESENTATIONS_DIR, exist_ok=True)
     
     title = item.get("title", "Presentacion")
     course_code = item.get("course_code", "")
-    student_name = item.get("student_name", "Frankelly Cordero")
-    student_enrrolment = item.get("student_enrrolment", "2024-3153")
+    student_name = item.get("student_name", STUDENT_NAME)
+    student_enrrolment = item.get("student_enrrolment", STUDENT_ENROLMENT)
     due_date = item.get("due_date", "Sin fecha límite")
 
     if not output_path:
         safe_title = sanitize_filename(title)
         output_path = os.path.join(PRESENTATIONS_DIR, f"{safe_title}.png")
 
-    header_html = (
-        f"<div class=\"cover-page\">\n"
-        f"  <img src=\"logo.jpeg\" alt=\"Universidad Central del Este\" class=\"cover-logo\" />\n"
-        f"  <h2>Facultad de Ciencias e Ingenierías</h2>\n"
-        f"  <h3>Escuela de Ingeniería de Software</h3>\n\n"
-        f"  <p><strong>Asignatura:</strong> {course_code}</p>\n"
-        f"  <p><strong>Asignación:</strong> {title}</p>\n"
-        f"  <p><strong>Estudiante:</strong> {student_name}</p>\n"
-        f"  <p><strong>Matrícula:</strong> {student_enrrolment}</p>\n"
-        f"  <p><strong>Fecha Límite:</strong> {due_date}</p>\n"
-        f"</div>\n"
+    header_html = build_cover_page_html(
+        course_code=course_code,
+        title=title,
+        student_name=student_name,
+        student_enrolment=student_enrrolment,
+        due_date=due_date
     )
 
     full_html = HTML_TEMPLATE.format(title=title, content=header_html)
@@ -565,8 +475,7 @@ def render_presentation_png(item, output_path=None):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     target_route = sys.argv[1] if len(sys.argv) > 1 else None
     output_route = sys.argv[2] if len(sys.argv) > 2 else None
     convert_md_to_pdf(target=target_route, output_dest=output_route)
-
-

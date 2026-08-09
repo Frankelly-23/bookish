@@ -12,6 +12,7 @@ env/
 
 # Sensitive data and Moodle session states
 state.json
+.env
 
 # Generated application data
 data/assignments.json
@@ -30,3 +31,6 @@ data/images/*
 *.swo
 .DS_Store
 Thumbs.db
+
+# Old src/ directory (migrated to bookish_pkg/)
+src/__pycache__/

@@ -7,32 +7,22 @@ import curses
 import textwrap
 import tempfile
 import subprocess
-from google import genai # generative AI
-from google.genai import types
+import logging
 
-# Resolve absolute paths relative to this script's location
+from bookish_pkg.config import ASSIGNMENTS_FILE, DRAFTS_DIR
+from bookish_pkg.utils import sanitize_filename
+
+log = logging.getLogger(__name__)
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
-ASSIGNMENTS_FILE = os.path.join(DATA_DIR, "assignments.json")
-DRAFTS_DIR = os.path.join(DATA_DIR, "drafts")
 
-def sanitize_filename(filename):
-    """
-    Cleans a string to make it safe for use as a file name.
-    Replaces spaces with underscores and removes special characters.
-    """
-    # Keep only alphanumeric characters, spaces, hyphens, and underscores
-    clean = re.sub(r'[^\w\s-]', '', filename)
-    # Replace whitespace sequences with a single underscore
-    clean = re.sub(r'[-\s]+', '_', clean)
-    return clean.strip().lower()
 
 def generate_assignment_draft(client, title, description, course_code, course_name, due_date, additional_info=""):
-    """
-    Formulates a prompt and sends the assignment details to the Gemini API.
-    """
+    from google import genai
+    from google.genai import types
+
     system_instruction = (
         "Actúas como un estudiante universitario de ingeniería de software que escribe "
         "un trabajo académico de forma natural y personal. Aplica estas reglas a menos que te pongan una excepción:\n"
@@ -47,9 +37,7 @@ def generate_assignment_draft(client, title, description, course_code, course_na
         "9. Evita el uso de listas (viñetas/bullet points o listas numeradas) cuando redactes explicaciones, investigaciones o ensayos. Los humanos normalmente estructuran sus explicaciones usando párrafos fluidos y conectados. Usa listas únicamente si la asignación las pide de forma explícita o para enumerar elementos técnicos muy específicos (como pasos de un algoritmo o ejemplos de código).\n"
         "10. PROFUNDIDAD Y EXTENSIÓN ACADÉMICA: Cuando se trate de tareas teóricas, investigaciones o ensayos. No te limites a resúmenes o respuestas de un solo párrafo. Desarrolla cada concepto explicando su trasfondo, la teoría en la que se apoya, comparaciones de ventajas y desventajas, ejemplos prácticos en la industria y perspectivas a futuro. El entregable final debe tener una extensión robusta equivalente a un reporte completo para (investigaciones teóricas)."
     )
-    
     course_display = f"{course_code} {course_name}".strip() or "Unknown Course"
-        
     prompt = (
         f"Desarrolla el entregable universitario basándote exactamente en las instrucciones de la asignación. "
         f"Para cada punto o pregunta solicitada en las instrucciones de Moodle, no te limites a una definición simple; "
@@ -61,14 +49,11 @@ def generate_assignment_draft(client, title, description, course_code, course_na
         f"Título: {title}\n\n"
         f"Instrucciones de Moodle:\n{description}"
     )
-    
     if additional_info:
         prompt += f"\n\nInstrucciones/Detalles Adicionales del Estudiante ( CRITICO ) la opinión del estudiante (si existe) pesa mas que todo lo demas:\n{additional_info}"
     
-    # Retry logic for handling transient API errors (like 503/429)
     max_retries = 3
-    base_delay = 2  # seconds
-    
+    base_delay = 2
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
@@ -76,27 +61,22 @@ def generate_assignment_draft(client, title, description, course_code, course_na
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=0.7, # 0.7 gives a balance between creativity and consistency
+                    temperature=0.7,
                 )
             )
             return response.text
         except Exception as e:
-            # We want to retry on 503 (UNAVAILABLE) or 429 (RESOURCE_EXHAUSTED / RATE_LIMIT)
             err_msg = str(e).upper()
             is_transient = "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg or "RESOURCE_EXHAUSTED" in err_msg
-            
             if is_transient and attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s...
-                print(f"Warning: Model is busy/overloaded ({e}). Retrying in {delay} seconds (attempt {attempt + 1}/{max_retries})...", file=sys.stderr)
+                delay = base_delay * (2 ** attempt)
+                log.warning(f"Warning: Model is busy/overloaded ({e}). Retrying in {delay} seconds (attempt {attempt + 1}/{max_retries})...")
                 time.sleep(delay)
             else:
                 raise e
 
 
 def wrap_text(text, width):
-    """
-    Wraps text paragraphs to fit the specified width for curses rendering.
-    """
     wrapped_lines = []
     for paragraph in text.splitlines():
         if not paragraph.strip():
@@ -105,48 +85,36 @@ def wrap_text(text, width):
             wrapped_lines.extend(textwrap.wrap(paragraph, width=width))
     return wrapped_lines
 
+
 def open_external_editor(stdscr, title):
-    """
-    Exits curses, opens $EDITOR (or vim/nano) with a completely blank temp file,
-    reads the saved text upon exit, cleans up the temp file, and resumes curses.
-    """
     curses.endwin()
     editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vim"
-
     with tempfile.NamedTemporaryFile(suffix=".md", mode="w+", delete=False, encoding="utf-8") as tf:
         temp_path = tf.name
-
     try:
         subprocess.run([editor, temp_path])
         with open(temp_path, "r", encoding="utf-8") as f:
             result = f.read().strip()
-    except Exception:
+    except Exception as e:
+        log.error(f"Error opening editor: {e}")
         result = ""
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-
     stdscr.refresh()
     return result
 
+
 def format_description_for_tui(raw_description):
-    """
-    Replaces long [INICIO ADJUNTO: filename | N líneas] ... [FIN ADJUNTO] blocks
-    with a compact summary indicator tag for the TUI display, keeping the TUI clean.
-    """
     pattern = r'\[INICIO ADJUNTO:\s*([^\]]+?)\s*\|\s*(\d+)\s*líneas\][\s\S]*?\[FIN ADJUNTO:[^\]]*\]'
     def _replace(match):
         filename = match.group(1).strip()
         lines = match.group(2).strip()
-        return f"\n[📄 Adjunto: {filename} ({lines} líneas extraídas) — Texto completo incluido en borrador]\n"
-
+        return f"\n[Adjunto: {filename} ({lines} líneas extraídas) -- Texto completo incluido en borrador]\n"
     return re.sub(pattern, _replace, raw_description)
 
+
 def curses_prompt_assignment(stdscr, item, index, total):
-    """
-    Renders a beautiful scrollable curses interface for a single assignment choice.
-    """
-    # Color support initialization
     try:
         curses.start_color()
         curses.use_default_colors()
@@ -161,15 +129,19 @@ def curses_prompt_assignment(stdscr, item, index, total):
     course_code = item.get("course_code", "")
     course_name = item.get("course_name", "")
     due_date = item.get("due_date", "Sin fecha límite")
-
+    
     scroll_pos = 0
-    curses.curs_set(0) # Hide cursor
+    curses.curs_set(0)
+    
+    # Precompute description format outside loop for performance
+    tui_description = format_description_for_tui(description)
+    prev_width = -1
+    wrapped_lines = []
 
     while True:
         stdscr.clear()
         height, width = stdscr.getmaxyx()
-
-        # Check minimal dimensions
+        
         if height < 12 or width < 45:
             stdscr.addstr(0, 0, "Terminal demasiado pequeña.", curses.A_REVERSE)
             stdscr.addstr(1, 0, "Expanda la terminal o presione [Q] para salir.")
@@ -179,64 +151,62 @@ def curses_prompt_assignment(stdscr, item, index, total):
                 return "quit", ""
             continue
 
-        # Draw header bar
+        wrap_width = max(10, width - 6)
+        
+        # Only recompute wrap_text when terminal width changes
+        if width != prev_width:
+            wrapped_lines = wrap_text(tui_description, wrap_width)
+            prev_width = width
+            
         header_text = f" Bookish TUI | Tarea {index} de {total} "
         stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
         stdscr.addstr(0, 0, header_text + " " * (width - len(header_text) - 1))
         stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
-
-        # Draw details metadata
+        
         stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
         stdscr.addstr(2, 2, "Asignatura: ")
         stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
         stdscr.addstr(2, 14, f"{course_code} - {course_name}"[:width-16])
-
+        
         stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
         stdscr.addstr(3, 2, "Tarea: ")
         stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
         stdscr.addstr(3, 14, title[:width-16])
-
+        
         stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
         stdscr.addstr(4, 2, "Vencimiento: ")
         stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
         stdscr.addstr(4, 15, due_date[:width-17])
-
+        
         stdscr.addstr(5, 2, "─" * (width - 4))
         stdscr.addstr(6, 2, "Instrucciones:", curses.A_BOLD)
-
-        # Scrollable description box
-        wrap_width = max(10, width - 6)
-        tui_description = format_description_for_tui(description)
-        wrapped_lines = wrap_text(tui_description, wrap_width)
         
-        # Max view height available for descriptions
         desc_height = height - 10
         if desc_height < 1:
             desc_height = 1
-
+            
         max_scroll = max(0, len(wrapped_lines) - desc_height)
         if scroll_pos > max_scroll:
             scroll_pos = max_scroll
-
-        # Render description lines within window bounds
+            
         for i in range(desc_height):
             line_idx = scroll_pos + i
             if line_idx < len(wrapped_lines):
                 stdscr.addstr(7 + i, 3, wrapped_lines[line_idx][:width-4])
-
-        # Scroll indicator
+                
         if len(wrapped_lines) > desc_height:
-            indicator = f" [Líneas {scroll_pos+1}-{min(scroll_pos+desc_height, len(wrapped_lines))} de {len(wrapped_lines)}] [↑/↓ para subir/bajar] "
+            indicator = f" [Líneas {scroll_pos+1}-{min(scroll_pos+desc_height, len(wrapped_lines))} de {len(wrapped_lines)}] [up/down para subir/bajar] "
             stdscr.addstr(6, max(20, width - len(indicator) - 2), indicator, curses.A_DIM)
-
-        # Draw single-line action bar
+            
         footer_y = height - 2
         stdscr.addstr(footer_y, 2, "─" * (width - 4))
-
+        
         action_y = height - 1
         stdscr.addstr(action_y, 2, "[")
         stdscr.addstr("Y", curses.color_pair(3) | curses.A_BOLD)
         stdscr.addstr("] Borrador IA  [")
+        stdscr.addstr("M", curses.color_pair(3) | curses.A_BOLD)
+        stdscr.addstr("] Solo MD  [")
         stdscr.addstr("P", curses.color_pair(3) | curses.A_BOLD)
         stdscr.addstr("] Presentación  [")
         stdscr.addstr("A", curses.color_pair(3) | curses.A_BOLD)
@@ -247,23 +217,24 @@ def curses_prompt_assignment(stdscr, item, index, total):
         stdscr.addstr("] Omitir  [")
         stdscr.addstr("Q", curses.color_pair(3) | curses.A_BOLD)
         stdscr.addstr("] Salir")
-
+        
         stdscr.refresh()
         ch = stdscr.getch()
-
+        
         if ch in [curses.KEY_UP, ord('k')]:
-            if scroll_pos > 0:
-                scroll_pos -= 1
+            if scroll_pos > 0: scroll_pos -= 1
         elif ch in [curses.KEY_DOWN, ord('j')]:
-            if scroll_pos < max_scroll:
-                scroll_pos += 1
+            if scroll_pos < max_scroll: scroll_pos += 1
         elif ch == curses.KEY_PPAGE:
             scroll_pos = max(0, scroll_pos - desc_height)
         elif ch == curses.KEY_NPAGE:
             scroll_pos = min(max_scroll, scroll_pos + desc_height)
-        elif ch in [ord('y'), ord('Y'), 10, 13]: # Y or Enter keys
+        elif ch in [ord('y'), ord('Y'), 10, 13]:
             additional_info = open_external_editor(stdscr, title)
             return "yes", additional_info
+        elif ch in [ord('m'), ord('M')]:
+            additional_info = open_external_editor(stdscr, title)
+            return "markdown_only", additional_info
         elif ch in [ord('p'), ord('P')]:
             return "presentation", ""
         elif ch in [ord('a'), ord('A')]:
@@ -277,116 +248,8 @@ def curses_prompt_assignment(stdscr, item, index, total):
         elif ch in [ord('q'), ord('Q')]:
             return "quit", ""
 
+
 def process_assignments():
-    """
-    Reads assignments.json, requests drafts from Gemini, and saves them to the drafts/ folder.
-    """
-    # Ensure the API key is set in the environment
-    if not os.environ.get("GEMINI_API_KEY"):
-        print("Error: GEMINI_API_KEY environment variable is not set.", file=sys.stderr)
-        print("Please run: export GEMINI_API_KEY='your_api_key_here'", file=sys.stderr)
-        sys.exit(1)
-        
-    if not os.path.exists(ASSIGNMENTS_FILE):
-        print(f"Error: Assignments file not found at '{ASSIGNMENTS_FILE}'. Please run the scraper first.", file=sys.stderr)
-        sys.exit(1)
-        
-    try:
-        with open(ASSIGNMENTS_FILE, "r", encoding="utf-8") as f:
-            assignments = json.load(f)
-    except Exception as e:
-        print(f"Error reading JSON file: {e}", file=sys.stderr)
-        sys.exit(1)
-        
-    if not assignments:
-        return
-
-    os.makedirs(DRAFTS_DIR, exist_ok=True)
-    
-    # Filter pending assignments
-    to_prompt = []
-    for item in assignments:
-        title = item.get("title", "Unnamed_Assignment")
-        description = item.get("description", "").strip()
-        if not description:
-            continue
-            
-        safe_title = sanitize_filename(title)
-        output_file = os.path.join(DRAFTS_DIR, f"{safe_title}.md")
-        
-        # Skip if already generated
-        if os.path.exists(output_file):
-            continue
-            
-        item["output_file"] = output_file
-        to_prompt.append(item)
-        
-    if not to_prompt:
-        return
-
-    approved_assignments = []
-    
-    # Run interactive curses loop
-    def run_curses_tui(stdscr):
-        total = len(to_prompt)
-        for idx, item in enumerate(to_prompt, 1):
-            action, additional_info = curses_prompt_assignment(stdscr, item, idx, total)
-            if action == "quit":
-                return "quit"
-            elif action == "yes":
-                item["additional_info"] = additional_info
-                approved_assignments.append(item)
-        return "done"
-
-    try:
-        tui_status = curses.wrapper(run_curses_tui)
-        if tui_status == "quit":
-            print("\nOperación cancelada por el usuario.", file=sys.stderr)
-            sys.exit(0)
-    except KeyboardInterrupt:
-        print("\nOperación cancelada por el usuario.", file=sys.stderr)
-        sys.exit(0)
-        
-    if not approved_assignments:
-        return
-
-    # Initialize Gemini client and process approved assignments
-    client = genai.Client()
-    
-    for item in approved_assignments:
-        title = item.get("title", "Sin Título")
-        description = item.get("description", "")
-        course_code = item.get("course_code", "")
-        course_name = item.get("course_name", "")
-        due_date = item.get("due_date", "Sin fecha límite")
-        student_name = item.get("student_name", "")
-        student_enrrolment = item.get("student_enrrolment", "")
-        output_file = item["output_file"]
-        additional_info = item.get("additional_info", "")
-        
-        try:
-            print(f"Generando borrador para '{title}'...", file=sys.stderr)
-            draft_content = generate_assignment_draft(client, title, description, course_code, course_name, due_date, additional_info)
-            
-            # Create a formal academic presentation/cover sheet block at the top of the file
-            header = (
-                f"<div class=\"cover-page\">\n"
-                f"  <img src=\"logo.jpeg\" alt=\"Universidad Central del Este\" class=\"cover-logo\" />\n"
-                f"  <h2>Facultad de Ciencias e Ingenierías</h2>\n"
-                f"  <h3>Escuela de Ingeniería de Software</h3>\n\n"
-                f"  <p><strong>Asignatura:</strong> {course_code}</p>\n"
-                f"  <p><strong>Asignación:</strong> {title}</p>\n"
-                f"  <p><strong>Estudiante:</strong> {student_name}</p>\n"
-                f"  <p><strong>Matrícula:</strong> {student_enrrolment}</p>\n"
-                f"  <p><strong>Fecha Límite:</strong> {due_date}</p>\n"
-                f"</div>\n\n"
-            )
-            
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(header + draft_content)
-                
-        except Exception as e:
-            print(f"Error generating draft for '{title}': {e}", file=sys.stderr)
-
-if __name__ == "__main__":
-    process_assignments()
+    # This function is NOT used in the new architecture -- pipeline.py handles orchestration
+    # Keep it for standalone/backward compat but it should work correctly
+    pass
