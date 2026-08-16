@@ -89,7 +89,7 @@ Bookish executes a 7-stage sequential pipeline managed by `src/bookish.py`:
 ### Stage 7: Session-Scoped PDF Compilation & Auto-Open
 - Tracks Markdown files created or modified during the current active session.
 - Compiles session Markdown files into styled academic PDFs (Letter size, 1.0-inch margins, Times New Roman body, Arial section headings, cover page, Base64 image inlining).
-- Outputs PDFs directly to `/mnt/c/Users/frank/Downloads/bookish` (or system Downloads) and opens them immediately using `wslview`, `xdg-open`, or `open`.
+- Outputs PDFs directly to the user's `Downloads/bookish` folder (Windows Downloads under WSL, or the system Downloads folder) and opens them immediately using `wslview`, `xdg-open`, or `open`.
 
 ---
 
@@ -128,6 +128,8 @@ export BOOKISH_PASS="your_moodle_password"
 export GEMINI_API_KEY="your_gemini_api_key"
 export EDITOR="vim"
 ```
+
+These are the only 4 values you need to configure. Your full name and student ID (matrícula) are obtained automatically from your Moodle profile on the first login, so no additional setup is required. The university name, faculty, and school shown on the cover page are fixed institutional values.
 
 ---
 

@@ -98,7 +98,7 @@ class BookishLogger:
 
         # Footer
         footer_y = height - 1
-        self.stdscr.addstr(footer_y, 2, "Procesando tareas universitarias... Espere por favor.", curses.A_DIM)
+        self.stdscr.addstr(footer_y, 2, "Procesando tareas universitarias... Espere por favor."[:max(0, width - 4)], curses.A_DIM)
         self.stdscr.refresh()
 
     pass
@@ -122,8 +122,8 @@ def create_handoff_file(item):
     course_code = item.get("course_code", "")
     due_date = item.get("due_date", "Sin fecha límite")
     description = item.get("description", "")
-    student_name = item.get("student_name", "Frankelly Cordero")
-    student_enrrolment = item.get("student_enrrolment", "2024-3153")
+    student_name = item.get("student_name", "")
+    student_enrrolment = item.get("student_enrrolment", "")
     additional_info = item.get("additional_info", "")
     safe_title = sanitize_filename(title)
     output_draft = os.path.join(DRAFTS_DIR, f"{safe_title}.md")
@@ -347,8 +347,8 @@ def run_bookish_pipeline(stdscr):
                     course_code = item.get("course_code", "")
                     course_name = item.get("course_name", "")
                     due_date = item.get("due_date", "Sin fecha límite")
-                    student_name = item.get("student_name", "Frankelly Cordero")
-                    student_enrrolment = item.get("student_enrrolment", "2024-3153")
+                    student_name = item.get("student_name", "")
+                    student_enrrolment = item.get("student_enrrolment", "")
                     additional_info = item.get("additional_info", "")
                     output_file = item["md_file"]
 
@@ -405,11 +405,51 @@ def run_bookish_pipeline(stdscr):
     stdscr.refresh()
     stdscr.getch()
 
+def _explain_curses_failure():
+    reasons = []
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        reasons.append(
+            "La entrada/salida no es una terminal interactiva (sin TTY). "
+            "Ejecuta `bookish` desde tu terminal y no desde un IDE/tool."
+        )
+    if not os.environ.get("TERM"):
+        reasons.append(
+            "La variable TERM no está definida. Ejecuta con: TERM=xterm-256color bookish"
+        )
+    try:
+        lines, cols = os.get_terminal_size()
+        if lines < 12 or cols < 45:
+            reasons.append(
+                f"La ventana del terminal es demasiado pequeña ({cols}x{lines}). "
+                "Expándela y vuelve a intentar."
+            )
+    except OSError:
+        pass
+
+    print("Esto suele ocurrir cuando:", file=sys.stderr)
+    for reason in reasons:
+        print(f"  - {reason}", file=sys.stderr)
+    if not reasons:
+        print("  - Su terminal tiene soporte limitado o inestable para la interfaz curses.", file=sys.stderr)
+
+
 def main():
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("\nError: Bookish requiere una terminal interactiva (TTY) para mostrar su interfaz.\n", file=sys.stderr)
+        sys.exit(1)
+
     try:
         curses.wrapper(run_bookish_pipeline)
     except KeyboardInterrupt:
         print("\nEjecución cancelada por el usuario.", file=sys.stderr)
+    except curses.error as e:
+        msg = str(e).lower()
+        if "nocbreak" in msg or "cbreak" in msg or "initscr" in msg or "setupterm" in msg:
+            print(f"\nError al inicializar la interfaz de terminal (curses): {e}", file=sys.stderr)
+            _explain_curses_failure()
+        else:
+            print(f"\nError durante la ejecución del TUI de Bookish: {e}", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"\nError durante la ejecución del TUI de Bookish: {e}", file=sys.stderr)
         sys.exit(1)

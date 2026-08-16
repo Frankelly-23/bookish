@@ -12,6 +12,7 @@ env/
 
 # Sensitive data and Moodle session states
 state.json
+data/user_profile.json
 
 # Generated application data
 data/assignments.json

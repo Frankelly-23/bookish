@@ -13,6 +13,7 @@ STATE_FILE = os.path.join(PROJECT_ROOT, "state.json")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 ASSIGNMENTS_FILE = os.path.join(DATA_DIR, "assignments.json")
 ATTACHMENTS_DIR = os.path.join(DATA_DIR, "attachments")
+PROFILE_FILE = os.path.join(DATA_DIR, "user_profile.json")
 BASE_URL = "https://moodle.uce.edu.do"
 LOGIN_URL = f"{BASE_URL}/login/index.php"
 CALENDAR_URL = f"{BASE_URL}/calendar/view.php?view=month"
@@ -151,6 +152,141 @@ def safe_goto(page, url, retries=2):
                 raise e
 
 
+def save_user_profile(profile):
+    """
+    Persists the logged-in user's profile (full name and identification number)
+    to data/user_profile.json so it survives across scraping runs.
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+        json.dump(profile, f, indent=2, ensure_ascii=False)
+
+
+def load_user_profile():
+    """
+    Loads the saved user profile (student_name / student_enrrolment).
+    Returns empty strings when no profile has been saved yet.
+    """
+    profile = {"student_name": "", "student_enrrolment": ""}
+    if os.path.exists(PROFILE_FILE):
+        try:
+            with open(PROFILE_FILE, "r", encoding="utf-8") as f:
+                stored = json.load(f)
+            if isinstance(stored, dict):
+                profile.update(stored)
+        except Exception:
+            pass
+    return profile
+
+
+def extract_identification_number(page):
+    """
+    Locates the user's identification number (matrícula) on a Moodle profile page.
+    """
+    try:
+        dt_locator = page.locator("dt")
+        for i in range(dt_locator.count()):
+            try:
+                label = dt_locator.nth(i).inner_text().strip().lower()
+            except Exception:
+                continue
+            if (
+                "identificaci" in label
+                or label in ("idnumber", "id number", "matrícula", "matricula", "expediente")
+            ):
+                try:
+                    dd = dt_locator.nth(i).locator("xpath=following-sibling::dd[1]")
+                    if dd.count() > 0:
+                        value = dd.inner_text().strip()
+                        if value:
+                            return value
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return ""
+
+
+def derive_matricula_from_username(username):
+    """
+    Derives the student's institutional ID (matrícula) from the login username.
+    UCE institutional IDs follow the pattern 'DDDD-DDDD' (e.g. '2024-0001') and
+    are embedded in the institutional email login (e.g. 'hs2024-0441@uce.edu.do'
+    -> '2024-0441'). Returns '' when the pattern cannot be found.
+    """
+    if not username:
+        return ""
+    local_part = username.split("@")[0]
+    match = re.search(r"\d{4}-\d{3,4}", local_part)
+    if not match:
+        return ""
+    return match.group(0)
+
+
+def extract_user_profile(page, username=""):
+    """
+    Navigates to the logged-in user's Moodle profile page and extracts their
+    full name and identification number (matrícula) automatically, so no
+    personal data has to be hardcoded or configured manually.
+    Returns a dict with 'student_name' and 'student_enrrolment' keys.
+    """
+    profile = {"student_name": "", "student_enrrolment": ""}
+
+    # Locate the profile page URL from the navbar user menu.
+    profile_url = ""
+    try:
+        links = page.locator('a[href*="user/profile.php?id="]')
+        if links.count() > 0:
+            profile_url = links.first.evaluate("el => el.href")
+    except Exception:
+        pass
+
+    if not profile_url:
+        try:
+            toggle = page.locator("#user-menu-toggle")
+            if toggle.count() > 0:
+                profile_url = toggle.first.evaluate(
+                    "el => { const root = el.closest('li') || el; "
+                    "const a = root.querySelector('a[href*=profile.php]'); "
+                    "return a ? a.href : ''; }"
+                )
+        except Exception:
+            pass
+
+    if not profile_url:
+        profile["student_enrrolment"] = derive_matricula_from_username(username)
+        return profile
+
+    try:
+        safe_goto(page, profile_url)
+
+        # Full name from the page header.
+        for selector in [
+            "#page-header h1",
+            ".page-heading h1",
+            "#region-main h1",
+            "h1",
+            "h2",
+        ]:
+            loc = page.locator(selector)
+            try:
+                if loc.count() > 0 and loc.first.inner_text().strip():
+                    profile["student_name"] = loc.first.inner_text().strip()
+                    break
+            except Exception:
+                continue
+
+        profile["student_enrrolment"] = extract_identification_number(page)
+
+    except Exception as e:
+        print(f"Warning: Could not extract user profile from Moodle: {e}", file=sys.stderr)
+
+    if not profile["student_enrrolment"]:
+        profile["student_enrrolment"] = derive_matricula_from_username(username)
+
+    return profile
+
+
 def login_and_save_session(username: str, password: str):
     """
     Handles logging in to Moodle programmatically.
@@ -196,6 +332,12 @@ def login_and_save_session(username: str, password: str):
 
             # Dismiss any post-login popups/modals before saving session
             dismiss_overlays(page)
+
+            # Extract the student's full name and identification number from
+            # the user's Moodle profile so no personal data is hardcoded.
+            profile = extract_user_profile(page, username)
+            if profile["student_name"] or profile["student_enrrolment"]:
+                save_user_profile(profile)
 
             context.storage_state(path=STATE_FILE)
             context.close()
@@ -394,6 +536,10 @@ def load_session_and_scrape():
 
             scraped_data = []
 
+            # Personal data comes from the user's Moodle profile, not from
+            # hardcoded values.
+            profile = load_user_profile()
+
             # If no assignments are found, write an empty list to the JSON file
             if unique_assignments:
                 for url, name in unique_assignments.items():
@@ -410,8 +556,8 @@ def load_session_and_scrape():
                             "open_date": open_date,
                             "due_date": due_date,
                             "description": description,
-                            "student_name": "Frankelly Cordero",
-                            "student_enrrolment": "2024-3153",
+                            "student_name": profile.get("student_name", ""),
+                            "student_enrrolment": profile.get("student_enrrolment", ""),
                         })
                     except Exception as e:
                         print(f"Error scraping assignment {url}: {e}", file=sys.stderr)

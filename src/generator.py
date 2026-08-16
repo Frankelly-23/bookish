@@ -227,26 +227,50 @@ def curses_prompt_assignment(stdscr, item, index, total):
         # Scroll indicator
         if len(wrapped_lines) > desc_height:
             indicator = f" [Líneas {scroll_pos+1}-{min(scroll_pos+desc_height, len(wrapped_lines))} de {len(wrapped_lines)}] [↑/↓ para subir/bajar] "
-            stdscr.addstr(6, max(20, width - len(indicator) - 2), indicator, curses.A_DIM)
+            ind_x = max(20, width - len(indicator) - 2)
+            if ind_x >= width:
+                ind_x = 2
+            stdscr.addstr(6, ind_x, indicator[:max(0, width - 1 - ind_x)], curses.A_DIM)
 
         # Draw single-line action bar
         footer_y = height - 2
-        stdscr.addstr(footer_y, 2, "─" * (width - 4))
+        stdscr.addstr(footer_y, 2, "─" * max(0, width - 4))
 
+        # Render the action bar, clipping each segment so it never overflows
+        # the terminal width (otherwise addstr raises "addwstr() returned ERR").
         action_y = height - 1
-        stdscr.addstr(action_y, 2, "[")
-        stdscr.addstr("Y", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Borrador IA  [")
-        stdscr.addstr("P", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Presentación  [")
-        stdscr.addstr("A", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] AGY  [")
-        stdscr.addstr("O", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] OpenCode  [")
-        stdscr.addstr("N", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Omitir  [")
-        stdscr.addstr("Q", curses.color_pair(3) | curses.A_BOLD)
-        stdscr.addstr("] Salir")
+        segments = [
+            ("[", False),
+            ("Y", True),
+            ("] Borrador IA  [", False),
+            ("P", True),
+            ("] Presentación  [", False),
+            ("A", True),
+            ("] AGY  [", False),
+            ("O", True),
+            ("] OpenCode  [", False),
+            ("N", True),
+            ("] Omitir  [", False),
+            ("Q", True),
+            ("] Salir", False),
+        ]
+        bar_x = 2
+        for text, is_key in segments:
+            if bar_x >= width:
+                break
+            limit = max(0, width - 1 - bar_x)
+            if limit <= 0:
+                break
+            clipped = text if len(text) <= limit else text[:limit]
+            if is_key:
+                stdscr.attron(curses.color_pair(3) | curses.A_BOLD)
+                stdscr.addstr(action_y, bar_x, clipped)
+                stdscr.attroff(curses.color_pair(3) | curses.A_BOLD)
+            else:
+                stdscr.addstr(action_y, bar_x, clipped)
+            bar_x += len(clipped)
+            if len(clipped) < len(text):
+                break
 
         stdscr.refresh()
         ch = stdscr.getch()

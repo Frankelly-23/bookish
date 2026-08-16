@@ -13,8 +13,53 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
 DRAFTS_DIR = os.path.join(PROJECT_ROOT, "data", "drafts")
 
-# Default output: directly to Windows Downloads/bookish
-DEFAULT_OUTPUT_DIR = "/mnt/c/Users/frank/Downloads/bookish"
+def resolve_default_output_dir():
+    """
+    Resolves the bookish output folder (for PDFs and presentation PNGs).
+    Preferred order:
+      1. Windows user Downloads folder (under WSL), detected via $W or by
+         scanning /mnt/c/Users/* for accounts that have a Downloads folder.
+      2. The current user's system Downloads folder.
+    Any candidate found is preferred over creating a fresh directory, and the
+    final choice is guaranteed to be an existing parent (or creatable) folder.
+    """
+    candidates = []
+
+    # 1a. WSL hint: $W (set by Windows Terminal / WSL) points at the Windows
+    #     user's home folder.
+    w_env = os.environ.get("W")
+    if w_env:
+        w_home = w_env.rstrip("/\\")
+        if w_home:
+            candidates.append(os.path.join(w_home, "Downloads", "bookish"))
+
+    # 1b. Scan /mnt/c/Users for real accounts that own a Downloads folder.
+    system_users = {"all users", "default", "default user", "public"}
+    try:
+        user_entries = sorted(os.listdir("/mnt/c/Users"))
+    except OSError:
+        user_entries = []
+    for entry in user_entries:
+        if entry.lower() in system_users or entry.startswith("."):
+            continue
+        downloads = os.path.join("/mnt/c/Users", entry, "Downloads")
+        if os.path.isdir(downloads):
+            candidates.append(os.path.join(downloads, "bookish"))
+
+    # 2. Fallback: the current user's Downloads folder.
+    candidates.append(os.path.join(os.path.expanduser("~"), "Downloads", "bookish"))
+
+    # Prefer the first candidate whose parent (Downloads) already exists so we
+    # never guess a Windows account that is not present on this machine.
+    for cand in candidates:
+        parent = os.path.dirname(cand)
+        if not parent or os.path.isdir(parent):
+            return cand
+    return candidates[-1]
+
+
+# Default output: WSL Windows Downloads, or the system Downloads folder
+DEFAULT_OUTPUT_DIR = resolve_default_output_dir()
 PDFS_DIR = DEFAULT_OUTPUT_DIR
 PRESENTATIONS_DIR = DEFAULT_OUTPUT_DIR
 
@@ -521,7 +566,7 @@ def sanitize_filename(filename):
 def render_presentation_png(item, output_path=None):
     """
     Renders an assignment cover page / presentation sheet as a PNG image.
-    Output defaults to DEFAULT_OUTPUT_DIR (/mnt/c/Users/frank/Downloads/bookish).
+    Output defaults to DEFAULT_OUTPUT_DIR (~/Downloads/bookish).
     'item' dict keys: title, course_code, student_name, student_enrrolment, due_date.
     Opens the PNG automatically after rendering.
     """
@@ -529,8 +574,8 @@ def render_presentation_png(item, output_path=None):
     
     title = item.get("title", "Presentacion")
     course_code = item.get("course_code", "")
-    student_name = item.get("student_name", "Frankelly Cordero")
-    student_enrrolment = item.get("student_enrrolment", "2024-3153")
+    student_name = item.get("student_name", "")
+    student_enrrolment = item.get("student_enrrolment", "")
     due_date = item.get("due_date", "Sin fecha límite")
 
     if not output_path:
